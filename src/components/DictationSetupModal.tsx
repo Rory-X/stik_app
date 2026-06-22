@@ -10,6 +10,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { DictationModelInfo, DictationDownloadProgress } from "@/types";
 import { Dropdown } from "./SettingsContent";
+import { useI18n } from "@/i18n/react";
+import type { MessageKey } from "@/i18n";
+import { translateBackendError } from "@/i18n/errors";
 
 interface Props {
   onClose: () => void;
@@ -42,7 +45,12 @@ const LANGUAGES: { code: string | null; label: string }[] = [
 
 type Phase = "choose" | "downloading" | "loading" | "error";
 
+function dictationLanguageKey(code: string | null): MessageKey {
+  return code ? (`dictation.language.${code}` as MessageKey) : "dictation.language.auto";
+}
+
 export default function DictationSetupModal({ onClose, onReady }: Props) {
+  const { t } = useI18n();
   const [models, setModels] = useState<DictationModelInfo[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [selectedLanguage, setSelectedLanguage] = useState<string | null>(null);
@@ -80,10 +88,14 @@ export default function DictationSetupModal({ onClose, onReady }: Props) {
         setSelectedModelId(balanced?.id ?? list[0]?.id ?? null);
       })
       .catch((e) => {
-        setErrorMsg(`Couldn't load model list: ${String(e)}`);
+        setErrorMsg(
+          t("dictation.setup.loadListFailed", {
+            error: translateBackendError(e, t),
+          }),
+        );
         setPhase("error");
       });
-  }, []);
+  }, [t]);
 
   // Subscribe to download lifecycle only. Model loading is now a
   // synchronous `invoke` that blocks until the sidecar finishes
@@ -112,7 +124,11 @@ export default function DictationSetupModal({ onClose, onReady }: Props) {
           });
           onReady(e.payload.model_id, selectedLanguage);
         } catch (err) {
-          setErrorMsg(`Couldn't load model: ${String(err)}`);
+          setErrorMsg(
+            t("dictation.setup.loadModelFailed", {
+              error: translateBackendError(err, t),
+            }),
+          );
           setPhase("error");
         }
       },
@@ -121,7 +137,7 @@ export default function DictationSetupModal({ onClose, onReady }: Props) {
       "dictation:download_error",
       (e) => {
         if (e.payload.model_id !== selectedModelId) return;
-        setErrorMsg(e.payload.message);
+        setErrorMsg(translateBackendError(e.payload.message, t));
         setPhase("error");
       },
     );
@@ -130,7 +146,7 @@ export default function DictationSetupModal({ onClose, onReady }: Props) {
       unlistenComplete.then((fn) => fn());
       unlistenError.then((fn) => fn());
     };
-  }, [selectedModelId, selectedLanguage, onReady]);
+  }, [selectedModelId, selectedLanguage, onReady, t]);
 
   const startDownload = useCallback(async () => {
     if (!selectedModelId) return;
@@ -142,10 +158,10 @@ export default function DictationSetupModal({ onClose, onReady }: Props) {
     try {
       await invoke("dictation_download_model", { modelId: selectedModelId });
     } catch (e) {
-      setErrorMsg(String(e));
+      setErrorMsg(translateBackendError(e, t));
       setPhase("error");
     }
-  }, [selectedModelId]);
+  }, [selectedModelId, t]);
 
   const cancelDownload = useCallback(async () => {
     try {
@@ -164,33 +180,33 @@ export default function DictationSetupModal({ onClose, onReady }: Props) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3">
       <div className="w-full max-w-[440px] max-h-[92vh] overflow-y-auto rounded-2xl bg-bg p-4 shadow-2xl border border-line">
         <h2 className="text-[14px] font-semibold text-ink mb-1">
-          Set up dictation
+          {t("dictation.setup.title")}
         </h2>
         <p className="text-[11px] text-stone leading-snug mb-3">
-          Stik uses <span className="text-ink font-medium">Whisper</span> for
-          on-device speech-to-text. Pick a language and a model size — it
-          downloads once and stays on your Mac.
+          {t("dictation.setup.description")}
         </p>
 
         {phase === "choose" && (
           <>
             <div className="mb-3">
               <label className="block text-[11px] text-stone mb-1">
-                Language
+                {t("dictation.setup.language")}
               </label>
               <Dropdown
                 value={selectedLanguage ?? ""}
                 options={LANGUAGES.map((l) => ({
                   value: l.code ?? "",
-                  label: l.label,
+                  label: t(dictationLanguageKey(l.code)),
                 }))}
                 onChange={(value) => setSelectedLanguage(value || null)}
-                placeholder="Select language"
+                placeholder={t("dictation.setup.selectLanguage")}
               />
             </div>
 
             <div className="mb-3">
-              <label className="block text-[11px] text-stone mb-1">Model</label>
+              <label className="block text-[11px] text-stone mb-1">
+                {t("dictation.setup.model")}
+              </label>
               <div className="space-y-1.5">
                 {models.map((m) => (
                   <label
@@ -222,7 +238,7 @@ export default function DictationSetupModal({ onClose, onReady }: Props) {
                       </p>
                       {m.downloaded && (
                         <p className="text-[10px] text-coral mt-0.5">
-                          Already downloaded
+                          {t("dictation.setup.alreadyDownloaded")}
                         </p>
                       )}
                     </div>
@@ -237,7 +253,7 @@ export default function DictationSetupModal({ onClose, onReady }: Props) {
                 onClick={onClose}
                 className="px-3 py-1.5 text-[11px] text-stone hover:text-ink rounded-lg"
               >
-                Cancel
+                {t("common.cancel")}
               </button>
               <button
                 type="button"
@@ -245,7 +261,7 @@ export default function DictationSetupModal({ onClose, onReady }: Props) {
                 disabled={!selectedModelId}
                 className="px-3 py-1.5 text-[11px] bg-coral text-white rounded-lg hover:bg-coral/90 disabled:opacity-50"
               >
-                Download &amp; use
+                {t("dictation.setup.downloadAndUse")}
               </button>
             </div>
           </>
@@ -253,7 +269,9 @@ export default function DictationSetupModal({ onClose, onReady }: Props) {
 
         {phase === "downloading" && (
           <div className="py-4">
-            <p className="text-[13px] text-ink mb-2">Downloading model…</p>
+            <p className="text-[13px] text-ink mb-2">
+              {t("dictation.setup.downloadingModel")}
+            </p>
             <div className="w-full h-2 bg-line/30 rounded-full overflow-hidden mb-2">
               <div
                 className="h-full bg-coral transition-all"
@@ -272,7 +290,7 @@ export default function DictationSetupModal({ onClose, onReady }: Props) {
                     bytesTotal / 1_000_000
                   ).toFixed(1)} MB`;
                 }
-                return progress > 0 ? `${pct}%` : "Connecting…";
+                return progress > 0 ? `${pct}%` : t("dictation.setup.connecting");
               })()}
             </p>
             <div className="flex justify-end mt-4">
@@ -281,7 +299,7 @@ export default function DictationSetupModal({ onClose, onReady }: Props) {
                 onClick={cancelDownload}
                 className="px-4 py-2 text-[12px] text-stone hover:text-coral rounded-lg"
               >
-                Cancel
+                {t("common.cancel")}
               </button>
             </div>
           </div>
@@ -290,21 +308,23 @@ export default function DictationSetupModal({ onClose, onReady }: Props) {
         {phase === "loading" && (
           <div className="py-6 text-center">
             <p className="text-[13px] text-ink">
-              Compiling model for the Neural Engine… {loadElapsed}s
+              {t("dictation.setup.compiling", { seconds: loadElapsed })}
             </p>
             <p className="text-[11px] text-stone mt-2 leading-snug max-w-[360px] mx-auto">
               {selectedModel && selectedModel.size_mb >= 500
-                ? "First load can take up to 2 minutes for the High quality model. This only happens once — subsequent launches are instant."
-                : "First load takes 20–30 seconds. This only happens once — subsequent launches are instant."}
+                ? t("dictation.setup.firstLoadHigh")
+                : t("dictation.setup.firstLoadNormal")}
             </p>
           </div>
         )}
 
         {phase === "error" && (
           <div className="py-4">
-            <p className="text-[13px] text-coral mb-2">Something went wrong</p>
+            <p className="text-[13px] text-coral mb-2">
+              {t("dictation.setup.errorTitle")}
+            </p>
             <p className="text-[11px] text-stone mb-4 break-words">
-              {errorMsg ?? "Unknown error"}
+              {errorMsg ?? t("dictation.setup.unknownError")}
             </p>
             <div className="flex justify-end gap-2">
               <button
@@ -312,14 +332,14 @@ export default function DictationSetupModal({ onClose, onReady }: Props) {
                 onClick={onClose}
                 className="px-4 py-2 text-[12px] text-stone hover:text-ink rounded-lg"
               >
-                Close
+                {t("common.close")}
               </button>
               <button
                 type="button"
                 onClick={() => setPhase("choose")}
                 className="px-4 py-2 text-[12px] bg-coral text-white rounded-lg hover:bg-coral/90"
               >
-                Try again
+                {t("dictation.setup.tryAgain")}
               </button>
             </div>
           </div>

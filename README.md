@@ -22,11 +22,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/0xMassi/stik_app/releases/latest"><img src="https://img.shields.io/github/v/release/0xMassi/stik_app?style=flat-square&color=E8705F&v=1" alt="Latest release"></a>
-  <img src="https://img.shields.io/github/license/0xMassi/stik_app?style=flat-square&v=1" alt="License">
+  <a href="https://github.com/Rory-X/stik_app/releases/latest"><img src="https://img.shields.io/github/v/release/Rory-X/stik_app?style=flat-square&color=E8705F&v=1" alt="Latest release"></a>
+  <img src="https://img.shields.io/github/license/Rory-X/stik_app?style=flat-square&v=1" alt="License">
   <img src="https://img.shields.io/badge/platform-macOS-000?style=flat-square&logo=apple&v=1" alt="macOS">
-  <a href="https://github.com/0xMassi/stik_app/releases"><img src="https://img.shields.io/github/downloads/0xMassi/stik_app/total?style=flat-square&color=E8705F&v=1" alt="Downloads"></a>
-  <a href="https://github.com/0xMassi/stik_app/stargazers"><img src="https://img.shields.io/github/stars/0xMassi/stik_app?style=flat-square&color=E8705F&v=1" alt="Stars"></a>
+  <a href="https://github.com/Rory-X/stik_app/releases"><img src="https://img.shields.io/github/downloads/Rory-X/stik_app/total?style=flat-square&color=E8705F&v=1" alt="Downloads"></a>
+  <a href="https://github.com/Rory-X/stik_app/stargazers"><img src="https://img.shields.io/github/stars/Rory-X/stik_app?style=flat-square&color=E8705F&v=1" alt="Stars"></a>
 </p>
 
 <p align="center">
@@ -51,7 +51,7 @@ No onboarding. No account. No sync setup. Hit `Cmd+Shift+S`, type, close. Your n
 
 Grab the latest `.dmg` from **[stik.ink/download](https://www.stik.ink/download?utm_source=github&utm_medium=readme&utm_campaign=install_primary)** — the recommended path, with release notes and a quick walkthrough.
 
-Prefer GitHub? The same `.dmg` is on the [Releases page](https://github.com/0xMassi/stik_app/releases/latest).
+Prefer GitHub? The same `.dmg` is on the [Releases page](https://github.com/Rory-X/stik_app/releases/latest).
 
 ### Homebrew
 
@@ -126,16 +126,23 @@ All shortcuts are customizable in Settings.
 - [Xcode Command Line Tools](https://developer.apple.com/xcode/resources/) (`xcode-select --install`)
 - [Rust](https://rustup.rs/) 1.70+
 - [Node.js](https://nodejs.org/) 18+
+- [Protobuf compiler](https://protobuf.dev/) (`brew install protobuf`)
 
 ### Build
 
 ```bash
-git clone https://github.com/0xMassi/stik_app.git
+git clone --recurse-submodules https://github.com/Rory-X/stik_app.git
 cd stik_app
 npm install
-npm run tauri dev      # Development with hot reload
-npm run tauri build    # Production .app bundle
+npm run build:sidecar   # Build the DarwinKit sidecar binary
+npm run dev:desktop     # Development with hot reload
+npm run build:desktop   # Local production .app and .dmg bundle
+npm run verify          # Tests, frontend build, and Rust check
 ```
+
+If you cloned without submodules, run `git submodule update --init --recursive` before building the sidecar.
+
+`npm run build:desktop` disables updater artifact generation for local builds. Release builds still use `npm run tauri build` in CI with `TAURI_SIGNING_PRIVATE_KEY` configured.
 
 ## Tech Stack
 
@@ -167,7 +174,7 @@ Got a feature idea or want to vote on what gets built next? Visit the **[Stik Id
 
 ## Support
 
-Have a question, found a bug, or want to request a feature? Reach out at [help@stik.ink](mailto:help@stik.ink), join [Discord](https://discord.gg/gG8vdCCRzW), follow us on [X](https://x.com/stik_app), or [open an issue](https://github.com/0xMassi/stik_app/issues).
+Have a question, found a bug, or want to request a feature? Reach out at [help@stik.ink](mailto:help@stik.ink), join [Discord](https://discord.gg/gG8vdCCRzW), follow us on [X](https://x.com/stik_app), or [open an issue](https://github.com/Rory-X/stik_app/issues).
 
 ## License
 

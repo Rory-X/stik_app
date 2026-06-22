@@ -7,6 +7,7 @@ on:
 
 jobs:
   build-and-release:
+    if: ${{ vars.ENABLE_SIGNED_RELEASE_WORKFLOW == 'true' }}
     runs-on: macos-latest
     permissions:
       contents: write
@@ -100,7 +101,7 @@ jobs:
           tauriScript: npm run tauri
           tagName: v__VERSION__
           releaseName: 'Stik v__VERSION__'
-          releaseBody: 'See [CHANGELOG](https://github.com/0xMassi/stik_app/blob/main/CHANGELOG.md) for details.'
+          releaseBody: 'See [CHANGELOG](https://github.com/Rory-X/stik_app/blob/main/CHANGELOG.md) for details.'
           releaseDraft: true
           prerelease: false
           # --bundles app,updater: skip tauri-bundler's bundle_dmg.sh
@@ -197,10 +198,10 @@ jobs:
             sha256 arm:   "${SHA_ARM}",
                    intel: "${SHA_INTEL}"
 
-            url "https://github.com/0xMassi/stik_app/releases/download/v#{version}/Stik_#{version}_#{arch}.dmg"
+            url "https://github.com/Rory-X/stik_app/releases/download/v#{version}/Stik_#{version}_#{arch}.dmg"
             name "Stik"
             desc "Instant thought capture - one shortcut, post-it appears, type, close"
-            homepage "https://github.com/0xMassi/stik_app"
+            homepage "https://github.com/Rory-X/stik_app"
 
             depends_on macos: ">= :catalina"
 

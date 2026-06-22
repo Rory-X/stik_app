@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useI18n } from "@/i18n/react";
 
 interface LockPromptProps {
   onAuthenticated: () => void;
@@ -10,6 +11,7 @@ export default function LockPrompt({
   onAuthenticated,
   onCancel,
 }: LockPromptProps) {
+  const { t } = useI18n();
   const [status, setStatus] = useState<"idle" | "authenticating" | "failed">(
     "idle",
   );
@@ -46,11 +48,11 @@ export default function LockPrompt({
           <path d="M7 11V7a5 5 0 0 1 10 0v4" />
         </svg>
 
-        <p className="text-[14px] font-medium text-ink">Locked Note</p>
+        <p className="text-[14px] font-medium text-ink">{t("lock.title")}</p>
         <p className="text-[12px] text-stone mt-1 leading-relaxed">
           {status === "failed"
-            ? "Authentication failed. Try again."
-            : "Authenticate to view this note."}
+            ? t("lock.failed")
+            : t("lock.description")}
         </p>
 
         <div className="flex items-center gap-2 mt-4">
@@ -59,7 +61,7 @@ export default function LockPrompt({
             onClick={onCancel}
             className="flex-1 px-3 py-2 text-[12px] text-stone border border-line rounded-lg hover:bg-line transition-colors"
           >
-            Cancel
+            {t("common.cancel")}
           </button>
           <button
             type="button"
@@ -67,7 +69,7 @@ export default function LockPrompt({
             disabled={status === "authenticating"}
             className="flex-1 px-3 py-2 text-[12px] text-white bg-coral rounded-lg hover:bg-coral/90 transition-colors disabled:opacity-50"
           >
-            {status === "authenticating" ? "Waiting..." : "Unlock"}
+            {status === "authenticating" ? t("common.waiting") : t("common.unlock")}
           </button>
         </div>
       </div>

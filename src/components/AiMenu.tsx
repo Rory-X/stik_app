@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useI18n } from "@/i18n/react";
+import { translateBackendError } from "@/i18n/errors";
 
 interface AiMenuProps {
   content: string;
@@ -25,6 +27,7 @@ export default function AiMenu({
   onShowToast,
   disabled,
 }: AiMenuProps) {
+  const { t } = useI18n();
   const [isOpen, setIsOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentAction, setCurrentAction] = useState<AiAction>(null);
@@ -72,7 +75,10 @@ export default function AiMenu({
       });
       setPreviewText(result.text);
     } catch (e) {
-      onShowToast(`Rephrase failed: ${e}`);
+      const error = translateBackendError(e, t);
+      onShowToast(
+        error === String(e) ? t("ai.toast.rephraseFailed", { error }) : error,
+      );
       handleClose();
     } finally {
       setIsProcessing(false);
@@ -86,7 +92,10 @@ export default function AiMenu({
       const result = await invoke<{ summary: string }>("ai_summarize", { content });
       setPreviewText(result.summary);
     } catch (e) {
-      onShowToast(`Summarize failed: ${e}`);
+      const error = translateBackendError(e, t);
+      onShowToast(
+        error === String(e) ? t("ai.toast.summarizeFailed", { error }) : error,
+      );
       handleClose();
     } finally {
       setIsProcessing(false);
@@ -103,7 +112,10 @@ export default function AiMenu({
       });
       setOrganizeResult(result);
     } catch (e) {
-      onShowToast(`Organize failed: ${e}`);
+      const error = translateBackendError(e, t);
+      onShowToast(
+        error === String(e) ? t("ai.toast.organizeFailed", { error }) : error,
+      );
       handleClose();
     } finally {
       setIsProcessing(false);
@@ -113,7 +125,11 @@ export default function AiMenu({
   const handleApply = () => {
     if (previewText) {
       onApplyText(previewText);
-      onShowToast(currentAction === "summarize" ? "Summary applied" : "Text rephrased");
+      onShowToast(
+        currentAction === "summarize"
+          ? t("ai.toast.summaryApplied")
+          : t("ai.toast.textRephrased"),
+      );
     }
     handleClose();
   };
@@ -135,7 +151,7 @@ export default function AiMenu({
               ? "bg-coral-light text-coral"
               : "hover:bg-coral-light text-coral/70 hover:text-coral"
         }`}
-        title="AI Assistant"
+        title={t("ai.assistant")}
       >
         <svg
           width="13"
@@ -163,9 +179,9 @@ export default function AiMenu({
             <div className="px-4 py-3 flex items-center gap-2 text-[11px] text-stone min-w-[200px]">
               <span className="animate-spin text-coral">*</span>
               <span>
-                {currentAction === "rephrase" && "Rephrasing..."}
-                {currentAction === "summarize" && "Summarizing..."}
-                {currentAction === "organize" && "Analyzing..."}
+                {currentAction === "rephrase" && t("ai.rephrasing")}
+                {currentAction === "summarize" && t("ai.summarizing")}
+                {currentAction === "organize" && t("ai.analyzing")}
               </span>
             </div>
           )}
@@ -175,7 +191,9 @@ export default function AiMenu({
             <div className="min-w-[260px] max-w-[320px]">
               <div className="px-3 py-2 border-b border-line">
                 <span className="text-[10px] font-semibold text-coral uppercase tracking-wider">
-                  {currentAction === "summarize" ? "Summary" : "Rephrased"}
+                  {currentAction === "summarize"
+                    ? t("ai.summary")
+                    : t("ai.rephrased")}
                 </span>
               </div>
               <div className="px-3 py-2 text-[12px] text-ink leading-relaxed max-h-[200px] overflow-y-auto">
@@ -186,13 +204,13 @@ export default function AiMenu({
                   onClick={handleClose}
                   className="px-2.5 py-1 rounded-md text-[10px] text-stone hover:bg-line transition-colors"
                 >
-                  Discard
+                  {t("common.discard")}
                 </button>
                 <button
                   onClick={handleApply}
                   className="px-2.5 py-1 rounded-md text-[10px] font-medium bg-coral text-white hover:bg-coral/90 transition-colors"
                 >
-                  Apply
+                  {t("common.apply")}
                 </button>
               </div>
             </div>
@@ -203,13 +221,15 @@ export default function AiMenu({
             <div className="min-w-[240px] max-w-[300px]">
               <div className="px-3 py-2 border-b border-line">
                 <span className="text-[10px] font-semibold text-coral uppercase tracking-wider">
-                  Organization suggestion
+                  {t("ai.organizationSuggestion")}
                 </span>
               </div>
               <div className="px-3 py-2 space-y-2">
                 {organizeResult.suggested_folder && (
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-stone">Folder:</span>
+                    <span className="text-[10px] text-stone">
+                      {t("ai.folder")}
+                    </span>
                     <span className="text-[11px] font-medium text-ink px-1.5 py-0.5 bg-coral/10 rounded">
                       {organizeResult.suggested_folder}
                     </span>
@@ -217,7 +237,9 @@ export default function AiMenu({
                 )}
                 {organizeResult.tags.length > 0 && (
                   <div className="flex items-start gap-2">
-                    <span className="text-[10px] text-stone mt-0.5">Tags:</span>
+                    <span className="text-[10px] text-stone mt-0.5">
+                      {t("ai.tags")}
+                    </span>
                     <div className="flex flex-wrap gap-1">
                       {organizeResult.tags.map((tag) => (
                         <span
@@ -237,7 +259,7 @@ export default function AiMenu({
                 )}
                 {!organizeResult.suggested_folder && organizeResult.tags.length === 0 && (
                   <p className="text-[11px] text-stone">
-                    Current organization looks good.
+                    {t("ai.currentOrganizationGood")}
                   </p>
                 )}
               </div>
@@ -246,7 +268,7 @@ export default function AiMenu({
                   onClick={handleClose}
                   className="px-2.5 py-1 rounded-md text-[10px] text-stone hover:bg-line transition-colors"
                 >
-                  Dismiss
+                  {t("common.dismiss")}
                 </button>
               </div>
             </div>
@@ -256,16 +278,18 @@ export default function AiMenu({
           {!isProcessing && !previewText && !organizeResult && showStylePicker && (
             <div className="min-w-[160px]">
               <div className="px-3 py-1.5 border-b border-line">
-                <span className="text-[10px] text-stone">Choose style</span>
+                <span className="text-[10px] text-stone">
+                  {t("ai.chooseStyle")}
+                </span>
               </div>
               {(["casual", "formal", "professional", "concise"] as RephraseStyle[]).map(
                 (style) => (
                   <button
                     key={style}
                     onClick={() => handleRephrase(style)}
-                    className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors capitalize"
+                    className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
                   >
-                    {style}
+                    {t(`ai.style.${style}`)}
                   </button>
                 )
               )}
@@ -280,14 +304,14 @@ export default function AiMenu({
                 className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors flex items-center gap-2"
               >
                 <span className="text-coral w-4 text-center">A</span>
-                Rephrase
+                {t("ai.rephrase")}
               </button>
               <button
                 onClick={handleSummarize}
                 className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors flex items-center gap-2"
               >
                 <span className="text-coral w-4 text-center">S</span>
-                Summarize
+                {t("ai.summarize")}
               </button>
               <div className="border-t border-line" />
               <button
@@ -295,7 +319,7 @@ export default function AiMenu({
                 className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors flex items-center gap-2"
               >
                 <span className="text-coral w-4 text-center">O</span>
-                Organize
+                {t("ai.organize")}
               </button>
             </div>
           )}

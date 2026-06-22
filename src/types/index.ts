@@ -80,6 +80,8 @@ export interface NoteLockSettings {
 export interface StikSettings {
   shortcut_mappings: ShortcutMapping[];
   default_folder: string;
+  locale: "en" | "zh-CN" | null;
+  has_completed_onboarding: boolean;
   git_sharing: GitSharingSettings;
   ai_features_enabled: boolean;
   vim_mode_enabled: boolean;

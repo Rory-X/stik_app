@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useI18n } from "@/i18n/react";
 
 interface ShortcutRecorderProps {
   value: string;
@@ -183,6 +184,7 @@ export default function ShortcutRecorder({
   reservedShortcuts = [],
   existingShortcuts = [],
 }: ShortcutRecorderProps) {
+  const { t } = useI18n();
   const [isRecording, setIsRecording] = useState(false);
   const [tempShortcut, setTempShortcut] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: "info" | "error" | "success" } | null>(null);
@@ -231,7 +233,7 @@ export default function ShortcutRecorder({
       if (!shortcut) {
         // Show hint if user pressed a key without modifiers
         if (!["Meta", "Control", "Alt", "Shift"].includes(e.key)) {
-          showToast("Hold ⌘, ⌃, ⇧, or ⌥ with a key", "info");
+          showToast(t("shortcut.holdModifierHint"), "info");
         }
         return;
       }
@@ -240,7 +242,7 @@ export default function ShortcutRecorder({
       if (reservedShortcuts.includes(shortcut)) {
         pendingShortcutRef.current = shortcut;
         hasErrorRef.current = true;
-        showToast("This shortcut is reserved by Stik", "error");
+        showToast(t("shortcut.reserved"), "error");
         setTempShortcut(shortcut);
         return;
       }
@@ -249,7 +251,7 @@ export default function ShortcutRecorder({
       if (existingShortcuts.includes(shortcut) && shortcut !== value) {
         pendingShortcutRef.current = shortcut;
         hasErrorRef.current = true;
-        showToast("This shortcut is already in use", "error");
+        showToast(t("shortcut.alreadyInUse"), "error");
         setTempShortcut(shortcut);
         return;
       }
@@ -266,7 +268,12 @@ export default function ShortcutRecorder({
       // Commit the shortcut when all keys are released
       if (pendingShortcutRef.current && !hasErrorRef.current) {
         onChange(pendingShortcutRef.current);
-        showToast(`Shortcut set to ${formatShortcutDisplay(pendingShortcutRef.current)}`, "success");
+        showToast(
+          t("shortcut.setTo", {
+            shortcut: formatShortcutDisplay(pendingShortcutRef.current),
+          }),
+          "success",
+        );
         pendingShortcutRef.current = null;
         setIsRecording(false);
         setTempShortcut(null);
@@ -281,7 +288,7 @@ export default function ShortcutRecorder({
       window.removeEventListener("keydown", handleKeyDown, true);
       window.removeEventListener("keyup", handleKeyUp, true);
     };
-  }, [value, onChange, reservedShortcuts, existingShortcuts, showToast]);
+  }, [value, onChange, reservedShortcuts, existingShortcuts, showToast, t]);
 
   // Click outside to cancel
   useEffect(() => {
@@ -311,7 +318,7 @@ export default function ShortcutRecorder({
   const displayValue = isRecording
     ? tempShortcut
       ? formatShortcutDisplay(tempShortcut)
-      : "Press keys..."
+      : t("shortcut.pressKeys")
     : formatShortcutDisplay(value);
 
   return (
@@ -343,10 +350,12 @@ export default function ShortcutRecorder({
                 setTempShortcut(null);
               }}
             >
-              cancel
+              {t("common.cancelShortcut")}
             </span>
           ) : (
-            <span className="text-[9px] text-stone">Click to record</span>
+            <span className="text-[9px] text-stone">
+              {t("shortcut.clickToRecord")}
+            </span>
           )}
         </button>
       </div>

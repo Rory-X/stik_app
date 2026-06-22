@@ -129,6 +129,10 @@ pub struct StikSettings {
     pub shortcut_mappings: Vec<ShortcutMapping>,
     pub default_folder: String,
     #[serde(default)]
+    pub locale: Option<String>,
+    #[serde(default)]
+    pub has_completed_onboarding: bool,
+    #[serde(default)]
     pub git_sharing: GitSharingSettings,
     #[serde(default = "default_true")]
     pub ai_features_enabled: bool,
@@ -212,6 +216,8 @@ impl Default for StikSettings {
                     enabled: true,
                 },
             ],
+            locale: None,
+            has_completed_onboarding: false,
             git_sharing: GitSharingSettings::default(),
             ai_features_enabled: true,
             vim_mode_enabled: false,
@@ -577,5 +583,13 @@ mod tests {
         assert_eq!(parse_color_value("#112233"), Some("17 34 51".to_string()));
         assert_eq!(parse_color_value("10 20 30"), Some("10 20 30".to_string()));
         assert_eq!(parse_color_value("not-a-color"), None);
+    }
+
+    #[test]
+    fn default_settings_require_first_run_language_choice() {
+        let settings = StikSettings::default();
+
+        assert_eq!(settings.locale, None);
+        assert!(!settings.has_completed_onboarding);
     }
 }

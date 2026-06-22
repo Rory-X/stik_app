@@ -38,6 +38,25 @@ describe("imageMarkdownPaths", () => {
     );
   });
 
+  it("encodes resolved asset URLs so markdown image parsing survives spaces and parentheses", () => {
+    const markdown = "![shot](.assets/screen one(2).png)";
+    const toFileSrc = (absPath: string) => `asset://localhost${absPath}`;
+
+    expect(resolveImagePaths(markdown, "/tmp/Stik/Inbox", toFileSrc)).toBe(
+      "![shot](asset://localhost/tmp/Stik/Inbox/.assets/screen%20one%282%29.png)"
+    );
+  });
+
+  it("does not double encode URLs returned by toFileSrc", () => {
+    const markdown = "![shot](.assets/screen one.png)";
+    const toFileSrc = () =>
+      "https://asset.localhost/tmp/Stik/Inbox/.assets/screen%20one.png";
+
+    expect(resolveImagePaths(markdown, "/tmp/Stik/Inbox", toFileSrc)).toBe(
+      "![shot](https://asset.localhost/tmp/Stik/Inbox/.assets/screen%20one.png)"
+    );
+  });
+
   it("normalizes legacy absolute asset links before resolving for display", () => {
     const markdown =
       "![shot](asset://localhost/Users/massi/Documents/Stik/Inbox/.assets/pasted.png)";

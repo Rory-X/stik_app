@@ -7,6 +7,15 @@ function isAssetProtocolUrl(url: string): boolean {
   );
 }
 
+function encodeMarkdownImageDestination(url: string): string {
+  return url.replace(/[ \t\r\n()]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+const RELATIVE_ASSET_IMAGE_RE =
+  /!\[([^\]]*)\]\(\.assets\/((?:[^()]|\([^)]*\))+)\)/g;
+
 /**
  * Convert asset protocol URLs back to relative `.assets/` paths for storage.
  * Handles both legacy `asset://localhost/...` and `https://asset.localhost/...`.
@@ -52,10 +61,10 @@ export function resolveImagePaths(
 ): string {
   const normalized = unresolveImagePaths(markdown);
   return normalized.replace(
-    /!\[([^\]]*)\]\(\.assets\/([^)]+)\)/g,
+    RELATIVE_ASSET_IMAGE_RE,
     (_match, alt, filename) => {
       const absPath = `${folderPath}/.assets/${filename}`;
-      return `![${alt}](${toFileSrc(absPath)})`;
+      return `![${alt}](${encodeMarkdownImageDestination(toFileSrc(absPath))})`;
     }
   );
 }

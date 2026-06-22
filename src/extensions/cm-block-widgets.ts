@@ -20,6 +20,7 @@ import {
 } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import type { DecorationSet } from "@codemirror/view";
+import { bindImagePreviewElement } from "@/utils/imagePreviewEvent";
 
 // ── Horizontal Rule ─────────────────────────────────────────────────
 
@@ -64,9 +65,16 @@ class ImageWidget extends WidgetType {
     img.alt = this.alt;
     img.draggable = false;
 
+    const previewButton = document.createElement("button");
+    previewButton.type = "button";
+    previewButton.className = "cm-image-preview-button";
+    previewButton.textContent = "+";
+    bindImagePreviewElement(previewButton, { src: this.src, alt: this.alt });
+
     img.onerror = () => {
       wrap.classList.add("cm-image-error");
       img.style.display = "none";
+      previewButton.style.display = "none";
       const fallback = document.createElement("span");
       fallback.className = "cm-image-error-text";
       fallback.textContent = this.alt || "Image failed to load";
@@ -74,11 +82,14 @@ class ImageWidget extends WidgetType {
     };
 
     wrap.appendChild(img);
+    wrap.appendChild(previewButton);
     return wrap;
   }
 
-  ignoreEvent() {
-    return false;
+  ignoreEvent(event: Event) {
+    return (event.target as HTMLElement | null)?.closest(
+      ".cm-image-preview-button",
+    ) !== null;
   }
 }
 

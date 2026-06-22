@@ -8,18 +8,22 @@ import SettingsModal from "./components/SettingsModal";
 import CommandPalette from "./components/CommandPalette";
 import AnalyticsNotice from "./components/AnalyticsNotice";
 import AppleNotesPicker from "./components/AppleNotesPicker";
+import LanguageOnboarding from "./components/LanguageOnboarding";
+import ImagePreviewWindow from "./components/ImagePreviewWindow";
 import { useTheme } from "./hooks/useTheme";
 import type { StickedNote, StikSettings } from "@/types";
 import { isMarkdownEffectivelyEmpty } from "@/utils/normalizeMarkdownForCopy";
 import { shouldHideCaptureOnBlur } from "@/utils/blurAutoHide";
 import { resolveCaptureFolder } from "@/utils/folderSelection";
+import { useI18n } from "@/i18n/react";
 
 type WindowType =
   | "postit"
   | "sticked"
   | "settings"
   | "command-palette"
-  | "apple-notes-picker";
+  | "apple-notes-picker"
+  | "image-preview";
 const PENDING_UPDATE_KEY = "stik_pending_update_version";
 
 function getWindowInfo(): { type: WindowType; id?: string; viewing?: boolean } {
@@ -50,11 +54,16 @@ function getWindowInfo(): { type: WindowType; id?: string; viewing?: boolean } {
     return { type: "apple-notes-picker" };
   }
 
+  if (windowType === "image-preview") {
+    return { type: "image-preview" };
+  }
+
   return { type: "postit" };
 }
 
 export default function App() {
   useTheme();
+  const { t } = useI18n();
   const [currentFolder, setCurrentFolder] = useState("");
   const [stickedNote, setStickedNote] = useState<StickedNote | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -63,7 +72,27 @@ export default function App() {
   const pendingBlurHideRef = useRef<number | null>(null);
   const skipNextBlurHideRef = useRef(false);
   const [showAnalyticsNotice, setShowAnalyticsNotice] = useState(false);
+  const [appSettings, setAppSettings] = useState<StikSettings | null>(null);
   const windowInfo = getWindowInfo();
+
+  useEffect(() => {
+    let cancelled = false;
+
+    invoke<StikSettings>("get_settings")
+      .then((settings) => {
+        if (!cancelled) setAppSettings(settings);
+      })
+      .catch(() => {});
+
+    const unlisten = listen<StikSettings>("settings-changed", (event) => {
+      setAppSettings(event.payload);
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten.then((fn) => fn());
+    };
+  }, []);
 
   const resolveFolder = useCallback(
     async (requestedFolder?: string, settingsFromEvent?: StikSettings) => {
@@ -400,13 +429,17 @@ export default function App() {
     return <AppleNotesPicker />;
   }
 
+  if (windowInfo.type === "image-preview") {
+    return <ImagePreviewWindow />;
+  }
+
   // Render sticked note if this is a sticked window
   if (windowInfo.type === "sticked") {
     if (loadError) {
       return (
         <div className="w-full h-full flex flex-col items-center justify-center bg-bg rounded-[14px] gap-3 p-6">
           <div className="text-coral text-sm font-medium">
-            Failed to load note
+            {t("sticked.loadFailed")}
           </div>
           <div className="text-stone text-xs text-center max-w-[280px]">
             {loadError}
@@ -420,7 +453,7 @@ export default function App() {
             }}
             className="mt-2 px-4 py-2 text-xs bg-line hover:bg-line/70 text-ink rounded-lg transition-colors"
           >
-            Close
+            {t("common.close")}
           </button>
         </div>
       );
@@ -429,7 +462,7 @@ export default function App() {
     if (!stickedNote) {
       return (
         <div className="w-full h-full flex items-center justify-center bg-bg rounded-[14px]">
-          <div className="text-stone text-sm">Loading...</div>
+          <div className="text-stone text-sm">{t("common.loading")}</div>
         </div>
       );
     }
@@ -457,6 +490,19 @@ export default function App() {
       console.error("Failed to open settings:", error);
     }
   }, []);
+
+  if (
+    windowInfo.type === "postit" &&
+    appSettings &&
+    (!appSettings.locale || !appSettings.has_completed_onboarding)
+  ) {
+    return (
+      <LanguageOnboarding
+        settings={appSettings}
+        onComplete={setAppSettings}
+      />
+    );
+  }
 
   return (
     <>

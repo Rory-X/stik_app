@@ -1,5 +1,6 @@
 import type { FolderStats } from "@/types";
 import { FOLDER_COLORS, FOLDER_COLOR_KEYS, getFolderColor } from "@/utils/folderColors";
+import { useI18n } from "@/i18n/react";
 
 interface FolderSidebarProps {
   folderStats: FolderStats[];
@@ -46,6 +47,7 @@ export default function FolderSidebar({
   onCancelRename,
   position = "left",
 }: FolderSidebarProps) {
+  const { t } = useI18n();
   const borderClass = position === "left" ? "border-r" : "border-l";
 
   return (
@@ -62,7 +64,7 @@ export default function FolderSidebar({
               : "text-ink hover:bg-line/50"
           }`}
         >
-          <span className="flex-1">All Folders</span>
+          <span className="flex-1">{t("command.sidebar.allFolders")}</span>
           <span
             className={`text-[10px] px-1.5 py-0.5 rounded ${
               selectedFolder === null
@@ -182,7 +184,7 @@ export default function FolderSidebar({
               type="text"
               value={newFolderName}
               onChange={(e) => onSetNewFolderName(e.target.value)}
-              placeholder="Folder name..."
+              placeholder={t("command.sidebar.folderName")}
               autoFocus
               className="flex-1 text-[12px] font-medium bg-transparent text-ink placeholder:text-stone outline-none min-w-0"
               onKeyDown={(e) => {
@@ -222,7 +224,7 @@ export default function FolderSidebar({
             onClick={() => onSetNewFolderName("")}
             className="text-[10px] text-stone hover:text-coral transition-colors"
           >
-            + New Folder
+            + {t("command.sidebar.newFolder")}
           </button>
         </div>
       )}

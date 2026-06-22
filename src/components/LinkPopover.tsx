@@ -10,6 +10,7 @@ import { open } from "@tauri-apps/plugin-shell";
 import type { EditorView } from "@codemirror/view";
 import { normalizeUrl } from "@/utils/normalizeUrl";
 import { consumeEscapeForPopover } from "@/utils/popoverEscape";
+import { useI18n } from "@/i18n/react";
 
 interface LinkPopoverProps {
   editorRef: { current: EditorView | null };
@@ -79,6 +80,7 @@ function getActiveLinkInfo(view: EditorView): LinkInfo | null {
 }
 
 export default function LinkPopover({ getView }: LinkPopoverProps) {
+  const { t } = useI18n();
   const [linkInfo, setLinkInfo] = useState<LinkInfo | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState("");
@@ -250,7 +252,7 @@ export default function LinkPopover({ getView }: LinkPopoverProps) {
           }}
         >
           <div className="link-popover-field">
-            <span className="link-popover-field-label">Text</span>
+            <span className="link-popover-field-label">{t("link.text")}</span>
             <input
               ref={textInputRef}
               type="text"
@@ -266,7 +268,7 @@ export default function LinkPopover({ getView }: LinkPopoverProps) {
                 }
               }}
               className="link-popover-input"
-              placeholder="Link text"
+              placeholder={t("link.linkText")}
               spellCheck={false}
             />
           </div>
@@ -287,7 +289,7 @@ export default function LinkPopover({ getView }: LinkPopoverProps) {
           </div>
           <div className="link-popover-edit-actions">
             <button type="submit" className="link-popover-btn link-popover-save">
-              Save
+              {t("common.save")}
             </button>
           </div>
         </form>
@@ -310,7 +312,7 @@ export default function LinkPopover({ getView }: LinkPopoverProps) {
             <button
               onClick={handleOpen}
               className="link-popover-btn"
-              title="Open in browser"
+              title={t("link.openInBrowser")}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
@@ -321,7 +323,7 @@ export default function LinkPopover({ getView }: LinkPopoverProps) {
             <button
               onClick={handleCopy}
               className="link-popover-btn"
-              title={copied ? "Copied!" : "Copy URL"}
+              title={copied ? t("link.copied") : t("link.copyUrl")}
             >
               {copied ? (
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -337,7 +339,7 @@ export default function LinkPopover({ getView }: LinkPopoverProps) {
             <button
               onClick={handleStartEdit}
               className="link-popover-btn"
-              title="Edit link"
+              title={t("link.edit")}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
@@ -347,7 +349,7 @@ export default function LinkPopover({ getView }: LinkPopoverProps) {
             <button
               onClick={handleUnlink}
               className="link-popover-btn link-popover-unlink"
-              title="Remove link"
+              title={t("link.remove")}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M15 7h3a5 5 0 0 1 0 10h-3m-6 0H6a5 5 0 0 1 0-10h3" />

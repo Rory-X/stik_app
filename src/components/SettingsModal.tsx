@@ -17,6 +17,8 @@ import {
   SETTINGS_MODAL_MAX_WIDTH,
   SETTINGS_MODAL_MIN_WIDTH,
 } from "@/utils/settingsLayout";
+import { useI18n } from "@/i18n/react";
+import type { MessageKey } from "@/i18n";
 
 const TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
   {
@@ -229,6 +231,7 @@ export default function SettingsModal({
   onClose,
   isWindow = false,
 }: SettingsModalProps) {
+  const { t } = useI18n();
   const [activeTab, setActiveTab] = useState<SettingsTab>("appearance");
   const [settings, setSettings] = useState<StikSettings | null>(null);
   const [folders, setFolders] = useState<string[]>([]);
@@ -273,7 +276,7 @@ export default function SettingsModal({
       console.error("Failed to check On This Day:", error);
       setOnThisDayStatus({
         found: false,
-        message: "Unable to check On This Day",
+        message: t("settings.insights.unableToCheck"),
         date: null,
         folder: null,
         preview: null,
@@ -469,7 +472,7 @@ export default function SettingsModal({
               }`}
             >
               {tab.icon}
-              <span>{tab.label}</span>
+              <span>{t(`settings.tabs.${tab.id}` as MessageKey)}</span>
             </button>
           );
         })}
@@ -484,11 +487,15 @@ export default function SettingsModal({
       folders={folders}
       onSettingsChange={handleSettingsChange}
       resolvedNotesDir={resolvedNotesDir}
-      captureStreakLabel={captureStreak?.label ?? "Streak unavailable"}
+      captureStreakLabel={
+        captureStreak?.label ?? t("settings.insights.streakUnavailable")
+      }
       captureStreakDays={captureStreak?.days ?? null}
       isRefreshingStreak={isRefreshingStreak}
       onRefreshCaptureStreak={loadCaptureStreak}
-      onThisDayMessage={onThisDayStatus?.message ?? "No On This Day check yet"}
+      onThisDayMessage={
+        onThisDayStatus?.message ?? t("settings.insights.noCheckYet")
+      }
       onThisDayPreview={onThisDayStatus?.preview ?? null}
       onThisDayDate={onThisDayStatus?.date ?? null}
       onThisDayFolder={onThisDayStatus?.folder ?? null}
@@ -528,7 +535,9 @@ export default function SettingsModal({
                 <circle cx="12" cy="12" r="3" />
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
-              <h2 className="text-[15px] font-semibold text-ink">Settings</h2>
+              <h2 className="text-[15px] font-semibold text-ink">
+                {t("settings.title")}
+              </h2>
             </div>
             <button
               type="button"
@@ -588,7 +597,9 @@ export default function SettingsModal({
                 <circle cx="12" cy="12" r="3" />
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
-              <h2 className="text-[15px] font-semibold text-ink">Settings</h2>
+              <h2 className="text-[15px] font-semibold text-ink">
+                {t("settings.title")}
+              </h2>
             </div>
             <button
               type="button"

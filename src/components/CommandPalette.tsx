@@ -9,26 +9,14 @@ import type {
   FolderStats,
   StikSettings,
 } from "@/types";
-import {
-  extractNoteTitle,
-  normalizeNoteSnippet,
-} from "@/utils/notePresentation";
+import { noteInfosToSearchResults } from "@/utils/commandPaletteNotes";
 import ConfirmDialog from "./ConfirmDialog";
 import LockPrompt from "./LockPrompt";
 import FolderSidebar from "./command-palette/FolderSidebar";
 import NoteList from "./command-palette/NoteList";
 import MovePicker from "./command-palette/MovePicker";
-
-/** Derive a human-readable title from a Stik filename like `20260310-114522-my-note-a1b2.md` */
-function titleFromFilename(filename: string): string {
-  const stem = filename.replace(/\.md$/i, "");
-  const parts = stem.split("-");
-  // Skip YYYYMMDD, HHMMSS prefix and UUID suffix
-  if (parts.length > 3) {
-    return parts.slice(2, -1).join(" ");
-  }
-  return stem;
-}
+import { useI18n } from "@/i18n/react";
+import { translateBackendError } from "@/i18n/errors";
 
 function Toast({ message, onDone }: { message: string; onDone: () => void }) {
   const [isVisible, setIsVisible] = useState(false);
@@ -58,6 +46,7 @@ function Toast({ message, onDone }: { message: string; onDone: () => void }) {
 }
 
 export default function CommandPalette() {
+  const { t } = useI18n();
   // Search state
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -170,19 +159,7 @@ export default function CommandPalette() {
   useEffect(() => {
     invoke<NoteInfo[]>("list_notes", { folder: selectedFolder }).then(
       (notes) => {
-        setRecentNotes(
-          notes.slice(0, 15).map((n) => ({
-            path: n.path,
-            filename: n.filename,
-            folder: n.folder,
-            title: n.locked
-              ? titleFromFilename(n.filename)
-              : extractNoteTitle(n.content),
-            snippet: normalizeNoteSnippet(n.content),
-            created: n.created,
-            locked: n.locked,
-          })),
-        );
+        setRecentNotes(noteInfosToSearchResults(notes));
       },
     );
   }, [selectedFolder]);
@@ -273,10 +250,10 @@ export default function CommandPalette() {
         closePalette();
       } catch (error) {
         console.error("Failed to open note:", error);
-        setToast(`Couldn't open note: ${String(error)}`);
+        setToast(t("command.toast.openFailed", { error: String(error) }));
       }
     },
-    [closePalette],
+    [closePalette, t],
   );
 
   const handleSelectResult = useCallback(
@@ -305,17 +282,7 @@ export default function CommandPalette() {
     const notes = await invoke<NoteInfo[]>("list_notes", {
       folder: selectedFolder,
     });
-    const recent = notes.slice(0, 15).map((n) => ({
-      path: n.path,
-      filename: n.filename,
-      folder: n.folder,
-      title: n.locked
-        ? titleFromFilename(n.filename)
-        : extractNoteTitle(n.content),
-      snippet: normalizeNoteSnippet(n.content),
-      created: n.created,
-      locked: n.locked,
-    }));
+    const recent = noteInfosToSearchResults(notes);
     setRecentNotes(recent);
 
     if (query.trim()) {
@@ -356,10 +323,10 @@ export default function CommandPalette() {
         await refreshAfterChange();
       } catch (error) {
         console.error("Failed to delete note:", error);
-        setToast(String(error));
+        setToast(translateBackendError(error, t));
       }
     },
-    [refreshAfterChange],
+    [refreshAfterChange, t],
   );
 
   // Delete folder
@@ -378,10 +345,10 @@ export default function CommandPalette() {
         await refreshAfterChange();
       } catch (error) {
         console.error("Failed to delete folder:", error);
-        setToast(String(error));
+        setToast(translateBackendError(error, t));
       }
     },
-    [selectedFolder, refreshAfterChange],
+    [selectedFolder, refreshAfterChange, t],
   );
 
   // Move note
@@ -397,10 +364,10 @@ export default function CommandPalette() {
         await refreshAfterChange();
       } catch (error) {
         console.error("Failed to move note:", error);
-        setToast(String(error));
+        setToast(translateBackendError(error, t));
       }
     },
-    [refreshAfterChange],
+    [refreshAfterChange, t],
   );
 
   // Save settings helper — keeps settingsRef in sync and notifies other windows
@@ -440,7 +407,7 @@ export default function CommandPalette() {
       setSelectedFolder(newFolderName.trim());
     } catch (error) {
       console.error("Failed to create folder:", error);
-      setToast(String(error));
+      setToast(translateBackendError(error, t));
     }
   }, [
     newFolderName,
@@ -448,6 +415,7 @@ export default function CommandPalette() {
     folderColors,
     refreshAfterChange,
     saveAndEmitSettings,
+    t,
   ]);
 
   // Rename folder
@@ -477,9 +445,9 @@ export default function CommandPalette() {
       }
     } catch (error) {
       console.error("Failed to rename folder:", error);
-      setToast(String(error));
+      setToast(translateBackendError(error, t));
     }
-  }, [renameValue, renamingFolderName, selectedFolder, refreshAfterChange]);
+  }, [renameValue, renamingFolderName, selectedFolder, refreshAfterChange, t]);
 
   // Set folder color (during rename)
   const handleSetFolderColor = useCallback(
@@ -508,7 +476,7 @@ export default function CommandPalette() {
     // Default to first available folder if "All" is selected
     const targetFolder = selectedFolder || folders[0];
     if (!targetFolder) {
-      setToast("Create a folder first");
+      setToast(t("command.toast.createFolderFirst"));
       return;
     }
 
@@ -537,9 +505,16 @@ export default function CommandPalette() {
       }
     } catch (error) {
       console.error("Failed to create note:", error);
-      setToast(String(error));
+      setToast(translateBackendError(error, t));
     }
-  }, [newNoteTitle, selectedFolder, folders, refreshAfterChange, closePalette]);
+  }, [
+    newNoteTitle,
+    selectedFolder,
+    folders,
+    refreshAfterChange,
+    closePalette,
+    t,
+  ]);
 
   // Select folder from sidebar
   const handleSelectFolder = useCallback((folder: string | null) => {
@@ -646,14 +621,14 @@ export default function CommandPalette() {
                     if (!ok) return;
                   }
                   await invoke("unlock_note", { path: note.path });
-                  setToast("Note unlocked");
+                  setToast(t("command.toast.noteUnlocked"));
                 } else {
                   await invoke("lock_note", { path: note.path });
-                  setToast("Note locked");
+                  setToast(t("command.toast.noteLocked"));
                 }
                 await refreshAfterChange();
               } catch (err) {
-                setToast(String(err));
+                setToast(translateBackendError(err, t));
               }
             };
             toggleLock();
@@ -730,6 +705,7 @@ export default function CommandPalette() {
     handleSelectResult,
     refreshAfterChange,
     closePalette,
+    t,
   ]);
 
   const toggleSidebarPosition = useCallback(async () => {
@@ -787,8 +763,8 @@ export default function CommandPalette() {
             }}
             placeholder={
               selectedFolder
-                ? `Search in ${selectedFolder}...`
-                : "Search across all notes..."
+                ? t("command.searchFolder", { folder: selectedFolder })
+                : t("command.searchAll")
             }
             className="flex-1 bg-transparent text-[15px] text-ink placeholder:text-stone outline-none"
           />
@@ -874,38 +850,38 @@ export default function CommandPalette() {
         <div className="flex items-center gap-3">
           <span>
             <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">tab</kbd>{" "}
-            switch pane
+            {t("command.footer.switchPane")}
           </span>
           <span>
             <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">↑↓</kbd>{" "}
-            navigate
+            {t("command.footer.navigate")}
           </span>
           <span>
             <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">↵</kbd>{" "}
-            open
+            {t("command.footer.open")}
           </span>
           <span>
             <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">⌫</kbd>{" "}
-            delete
+            {t("command.footer.delete")}
           </span>
           <span>
             <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">⌘M</kbd>{" "}
-            move
+            {t("command.footer.moveNote")}
           </span>
           <span>
             <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">⌘N</kbd>{" "}
-            new
+            {t("command.footer.newNote")}
           </span>
           <span>
             <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">⌘L</kbd>{" "}
-            lock
+            {t("command.footer.lock")}
           </span>
         </div>
         <div className="flex items-center gap-3">
           <button
             onClick={toggleSidebarPosition}
             className="flex items-center gap-1 hover:text-coral transition-colors"
-            title={`Move sidebar to ${sidebarPosition === "left" ? "right" : "left"}`}
+            title={t("command.footer.moveSidebar")}
           >
             <svg
               className={`w-3 h-3 ${sidebarPosition === "right" ? "scale-x-[-1]" : ""}`}
@@ -917,7 +893,7 @@ export default function CommandPalette() {
           </button>
           <span>
             <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">esc</kbd>{" "}
-            close
+            {t("command.footer.close")}
           </span>
         </div>
       </div>
@@ -927,14 +903,18 @@ export default function CommandPalette() {
         <ConfirmDialog
           title={
             confirmDelete.type === "folder"
-              ? `Delete folder "${confirmDelete.folderName}"?`
-              : "Delete note?"
+              ? t("command.delete.folderTitle", {
+                  folder: confirmDelete.folderName ?? "",
+                })
+              : t("command.delete.noteTitle")
           }
           description={
             confirmDelete.type === "folder"
-              ? "This will delete the folder and all its notes."
+              ? t("command.delete.folderDescription")
               : confirmDelete.note
-                ? `From: ${confirmDelete.note.folder}`
+                ? t("command.delete.fromFolder", {
+                    folder: confirmDelete.note.folder,
+                  })
                 : undefined
           }
           onConfirm={() => {

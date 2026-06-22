@@ -244,6 +244,7 @@ export const stikEditorTheme = EditorView.theme({
   // Inline image widget
   ".cm-image-widget": {
     display: "inline-block",
+    position: "relative",
     maxWidth: "100%",
     margin: "4px 0",
     lineHeight: "0",
@@ -254,6 +255,37 @@ export const stikEditorTheme = EditorView.theme({
     height: "auto",
     borderRadius: "6px",
     display: "block",
+    transition: "filter 120ms ease, transform 120ms ease",
+  },
+  ".cm-image-widget img:hover": {
+    filter: "brightness(0.94)",
+  },
+  ".cm-image-preview-button": {
+    position: "absolute",
+    top: "8px",
+    right: "8px",
+    width: "28px",
+    height: "28px",
+    borderRadius: "6px",
+    border: "1px solid rgba(255, 255, 255, 0.22)",
+    backgroundColor: "rgba(20, 20, 20, 0.72)",
+    color: "white",
+    fontSize: "18px",
+    lineHeight: "24px",
+    fontWeight: "600",
+    cursor: "pointer",
+    opacity: "0",
+    transform: "translateY(-2px)",
+    transition: "opacity 120ms ease, transform 120ms ease, background-color 120ms ease",
+    pointerEvents: "none",
+  },
+  ".cm-image-widget:hover .cm-image-preview-button, .cm-image-preview-button:focus": {
+    opacity: "1",
+    transform: "translateY(0)",
+    pointerEvents: "auto",
+  },
+  ".cm-image-preview-button:hover": {
+    backgroundColor: "rgba(20, 20, 20, 0.9)",
   },
   ".cm-image-widget.cm-image-error": {
     display: "flex",

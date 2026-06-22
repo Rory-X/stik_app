@@ -1,13 +1,17 @@
 {
   "name": "stik",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Instant thought capture. One shortcut, post-it appears, type, close.",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:sidecar": "./scripts/build-darwinkit.sh",
+    "build:desktop": "npm run build:sidecar && tauri build --config '{\"bundle\":{\"createUpdaterArtifacts\":false}}' --bundles app,dmg",
     "preview": "vite preview",
     "tauri": "tauri",
+    "dev:desktop": "npm run build:sidecar && tauri dev",
+    "verify": "npm test && npm run build && cd src-tauri && cargo check",
     "release": "./scripts/release.sh",
     "release:patch": "./scripts/release.sh patch",
     "release:minor": "./scripts/release.sh minor",

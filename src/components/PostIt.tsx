@@ -16,6 +16,7 @@ import type { StickedNote, StikSettings } from "@/types";
 import type { VimMode } from "@/extensions/cm-vim";
 import {
   getSlashCommandNames,
+  setSlashCommandLocale,
   setCustomTemplates,
 } from "@/extensions/cm-slash-commands";
 import {
@@ -25,6 +26,7 @@ import {
 import { shouldSaveOnGlobalEscape } from "@/utils/captureEscape";
 import { isCaptureSlashQuery } from "@/utils/slashQuery";
 import { markdownToPlainText } from "@/utils/markdownToHtml";
+import type { ImagePreviewPayload } from "@/utils/imagePreviewEvent";
 import { shouldOpenVimCommandBar } from "@/utils/vimCommandKey";
 import {
   resolveImagePaths,
@@ -35,6 +37,7 @@ import { getFolderColor } from "@/utils/folderColors";
 import { formatShortcutDisplay } from "./ShortcutRecorder";
 import { loadGoogleFont, loadCustomFont } from "@/utils/fonts";
 import SyncIndicator from "./SyncIndicator";
+import { useI18n } from "@/i18n/react";
 
 interface PostItProps {
   folder: string;
@@ -105,6 +108,7 @@ export default function PostIt({
   isViewing = false,
   originalPath,
 }: PostItProps) {
+  const { t } = useI18n();
   const [content, setContent] = useState(initialContent || "");
   const [showPicker, setShowPicker] = useState(false);
   const [suggestedFolder, setSuggestedFolder] = useState<string | null>(null);
@@ -281,6 +285,7 @@ export default function PostIt({
         setCustomFonts(s.custom_fonts ?? []);
         setFolderColors(s.folder_colors ?? {});
         setSystemShortcuts(s.system_shortcuts ?? {});
+        setSlashCommandLocale(s.locale);
         setCustomTemplates(s.custom_templates ?? []);
         setTextDirection(
           (s.text_direction as "auto" | "ltr" | "rtl") || "auto",
@@ -304,6 +309,7 @@ export default function PostIt({
       setCustomFonts(event.payload.custom_fonts ?? []);
       setFolderColors(event.payload.folder_colors ?? {});
       setSystemShortcuts(event.payload.system_shortcuts ?? {});
+      setSlashCommandLocale(event.payload.locale);
       setCustomTemplates(event.payload.custom_templates ?? []);
       setTextDirection(
         (event.payload.text_direction as "auto" | "ltr" | "rtl") || "auto",
@@ -573,7 +579,7 @@ export default function PostIt({
     } catch (error) {
       console.error("Failed to save note:", error);
       setIsSaving(false);
-      setToast("Failed to save note");
+      setToast(t("postit.toast.saveFailed"));
     }
   }, [
     isSticked,
@@ -582,6 +588,7 @@ export default function PostIt({
     onContentChange,
     resolveFolderForAction,
     getLiveContent,
+    t,
   ]);
 
   const showToast = useCallback((message: string) => {
@@ -818,7 +825,7 @@ export default function PostIt({
       if (isCopying) return;
       if (isMarkdownEffectivelyEmpty(content)) {
         setIsCopyMenuOpen(false);
-        showToast("Nothing to copy");
+        showToast(t("postit.toast.nothingToCopy"));
         return;
       }
 
@@ -845,14 +852,14 @@ export default function PostIt({
             plainText,
           });
 
-          showToast("Copied as rich text");
+          showToast(t("postit.toast.copiedRichText"));
         } else if (mode === "markdown") {
           const markdownText = normalizeMarkdownForCopy(content);
           const copied = await copyPlainText(markdownText);
           if (!copied) {
             throw new Error("Markdown copy failed in all available methods");
           }
-          showToast("Copied as markdown");
+          showToast(t("postit.toast.copiedMarkdown"));
         } else {
           const activeElement = document.activeElement as HTMLElement | null;
           const shouldRestoreEditorFocus =
@@ -871,7 +878,7 @@ export default function PostIt({
               );
             });
             await invoke("copy_visible_note_image_to_clipboard");
-            showToast("Copied as image");
+            showToast(t("postit.toast.copiedImage"));
           } finally {
             document.documentElement.classList.remove("capturing-image");
             if (shouldRestoreEditorFocus) {
@@ -886,9 +893,9 @@ export default function PostIt({
           error instanceof Error &&
           error.message.includes("not supported")
         ) {
-          showToast("Image copy is not supported here");
+          showToast(t("postit.toast.imageCopyUnsupported"));
         } else {
-          showToast("Copy failed");
+          showToast(t("postit.toast.copyFailed"));
         }
       } finally {
         setIsCopying(false);
@@ -1500,6 +1507,17 @@ export default function PostIt({
     [folder],
   );
 
+  const handleImagePreview = useCallback(
+    async ({ src, alt }: ImagePreviewPayload) => {
+      try {
+        await invoke("preview_image", { src, alt });
+      } catch (err) {
+        console.error("Failed to preview image:", err);
+      }
+    },
+    [],
+  );
+
   // Show save animation
   if (isSaving) {
     return (
@@ -1530,7 +1548,9 @@ export default function PostIt({
               d="M15 26l7 7 15-15"
             />
           </svg>
-          <p className="save-text text-coral font-semibold text-sm">Saved</p>
+          <p className="save-text text-coral font-semibold text-sm">
+            {t("postit.saved")}
+          </p>
         </div>
       </div>
     );
@@ -1566,7 +1586,7 @@ export default function PostIt({
                         ? "hover:bg-coral-light text-coral hover:text-coral"
                         : "text-stone/50 cursor-not-allowed"
                     }`}
-                    title="Pin to screen"
+                    title={t("postit.pinToScreen")}
                   >
                     <svg
                       width="14"
@@ -1660,7 +1680,7 @@ export default function PostIt({
                           ? "text-coral bg-coral-light"
                           : "text-stone hover:bg-line hover:text-ink"
                       }`}
-                      title="Actions"
+                      title={t("postit.actions")}
                     >
                       <svg
                         width="14"
@@ -1801,7 +1821,7 @@ export default function PostIt({
                     <button
                       onClick={handleCloseWithoutSaving}
                       className="px-2 py-1 rounded-md hover:bg-line text-stone hover:text-ink transition-colors text-[10px]"
-                      title="Close without saving"
+                      title={t("postit.closeWithoutSaving")}
                     >
                       Close
                     </button>
@@ -1826,7 +1846,7 @@ export default function PostIt({
                   <button
                     onClick={handleSaveAndCloseSticked}
                     className="px-2.5 py-1.5 bg-coral-light text-coral rounded-lg text-[10px] font-semibold hover:bg-coral hover:text-white transition-colors cursor-pointer"
-                    title="Save and close (Esc)"
+                    title={t("postit.saveAndClose")}
                   >
                     esc
                   </button>
@@ -1834,7 +1854,7 @@ export default function PostIt({
                   <button
                     onClick={handleSaveAndClose}
                     className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold transition-colors bg-coral-light text-coral hover:bg-coral hover:text-white cursor-pointer"
-                    title="Save and close (Esc)"
+                    title={t("postit.saveAndClose")}
                   >
                     esc
                   </button>
@@ -1870,6 +1890,7 @@ export default function PostIt({
               onVimCloseWithoutSaving={runVimDiscardAndClose}
               onImagePaste={handleImagePaste}
               onImageDropPath={handleImageDropPath}
+              onImagePreview={handleImagePreview}
               onWikiLinkClick={handleWikiLinkClick}
               onCursorChange={handleCursorChange}
             />
@@ -1965,11 +1986,13 @@ export default function PostIt({
                   </span>
                 ) : isSticked && !isPinned && !isViewing ? (
                   <span className="text-stone">
-                    <span className="text-amber-500">○</span> unpinned
+                    <span className="text-amber-500">○</span>{" "}
+                    {t("postit.status.unpinned")}
                   </span>
                 ) : (
                   <span className="text-stone">
-                    <span className="text-coral">✦</span> markdown supported
+                    <span className="text-coral">✦</span>{" "}
+                    {t("postit.status.markdown")}
                   </span>
                 )}
                 {(onOpenSettings || isSticked) && (
@@ -1993,8 +2016,8 @@ export default function PostIt({
                         }`}
                         title={
                           formatToolbar
-                            ? "Hide format buttons"
-                            : "Show format buttons"
+                            ? t("postit.toolbar.hideFormatButtons")
+                            : t("postit.toolbar.showFormatButtons")
                         }
                       >
                         <svg
@@ -2016,7 +2039,7 @@ export default function PostIt({
                     <button
                       onClick={() => invoke("open_command_palette")}
                       className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-line text-stone hover:text-ink transition-colors"
-                      title={`Command Palette (${formatShortcutDisplay(systemShortcuts.search || "Cmd+Shift+P")})`}
+                      title={`${t("postit.toolbar.commandPalette")} (${formatShortcutDisplay(systemShortcuts.search || "Cmd+Shift+P")})`}
                     >
                       <svg
                         width="14"
@@ -2037,7 +2060,7 @@ export default function PostIt({
                         isSticked ? invoke("open_settings") : onOpenSettings?.()
                       }
                       className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-line text-stone hover:text-ink transition-colors"
-                      title={`Settings (${formatShortcutDisplay(systemShortcuts.settings || "Cmd+Shift+Comma")})`}
+                      title={`${t("postit.toolbar.settings")} (${formatShortcutDisplay(systemShortcuts.settings || "Cmd+Shift+Comma")})`}
                     >
                       <svg
                         width="14"

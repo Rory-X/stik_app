@@ -5,6 +5,7 @@ import {
   normalizeNoteSnippet,
 } from "@/utils/notePresentation";
 import { getFolderColor } from "@/utils/folderColors";
+import { useI18n } from "@/i18n/react";
 
 interface NoteListProps {
   results: SearchResult[];
@@ -60,6 +61,7 @@ export default function NoteList({
   selectedFolder,
   folders,
 }: NoteListProps) {
+  const { locale, t } = useI18n();
   const hasQuery = query.trim().length > 0;
 
   if (
@@ -70,7 +72,9 @@ export default function NoteList({
   ) {
     return (
       <div className="flex-1 flex items-center justify-center p-4">
-        <span className="text-stone text-sm">No notes found for "{query}"</span>
+        <span className="text-stone text-sm">
+          {t("command.noteList.noResults", { query })}
+        </span>
       </div>
     );
   }
@@ -99,7 +103,7 @@ export default function NoteList({
               type="text"
               value={newNoteTitle}
               onChange={(e) => onSetNewNoteTitle(e.target.value)}
-              placeholder="Note title..."
+              placeholder={t("command.noteList.noteTitle")}
               autoFocus
               className="flex-1 text-[14px] font-medium bg-transparent text-ink placeholder:text-stone outline-none"
               onKeyDown={(e) => {
@@ -115,8 +119,7 @@ export default function NoteList({
             />
           </div>
           <div className="mt-1 ml-6 text-[10px] text-stone">
-            in <span className="text-coral font-medium">{targetFolder}</span> —
-            enter to create, esc to cancel
+            {t("command.noteList.createHint", { folder: targetFolder })}
           </div>
         </div>
       )}
@@ -125,14 +128,14 @@ export default function NoteList({
       {!hasQuery && results.length > 0 && (
         <div className="px-4 py-2 border-b border-line/50 bg-line/20">
           <span className="text-[10px] font-semibold text-stone uppercase tracking-wider">
-            Recent
+            {t("command.noteList.allNotes")}
           </span>
         </div>
       )}
 
       {results.map((result, index) => {
         const displayTitle = normalizeNoteTitle(
-          result.title || result.filename || "Untitled",
+          result.title || result.filename || t("command.noteList.untitled"),
         );
         const displaySnippet = normalizeNoteSnippet(result.snippet);
         const shouldShowSnippet =
@@ -182,7 +185,7 @@ export default function NoteList({
               </span>
             </div>
             <span className="text-[10px] text-stone font-mono">
-              {formatRelativeDate(result.created)}
+              {formatRelativeDate(result.created, locale)}
             </span>
             {shouldShowSnippet && !result.locked && (
               <p className="text-[12px] text-stone leading-relaxed mt-0.5">
@@ -198,13 +201,13 @@ export default function NoteList({
         <>
           <div className="px-4 py-2 border-b border-line/50 bg-line/20">
             <span className="text-[10px] font-semibold text-stone uppercase tracking-wider">
-              Related
+              {t("command.noteList.related")}
             </span>
           </div>
           {semanticResults.map((result, index) => {
             const globalIndex = results.length + index;
             const displayTitle = normalizeNoteTitle(
-              result.title || result.filename || "Untitled",
+              result.title || result.filename || t("command.noteList.untitled"),
             );
             const displaySnippet = normalizeNoteSnippet(result.snippet);
             const shouldShowSnippet =
@@ -235,7 +238,7 @@ export default function NoteList({
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] text-stone font-mono">
-                    {formatRelativeDate(result.created)}
+                    {formatRelativeDate(result.created, locale)}
                   </span>
                   <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-coral/10 text-coral">
                     {Math.round(result.similarity * 100)}% match

@@ -1,5 +1,5 @@
 use crate::commands::{notes, settings, sticked_notes};
-use crate::state::{AppState, LastSavedNote};
+use crate::state::{AppState, ImagePreviewContent, LastSavedNote};
 use sticked_notes::StickedNote;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 
@@ -538,6 +538,68 @@ pub fn open_manager(app: AppHandle) -> Result<bool, String> {
 pub fn open_settings(app: AppHandle) -> Result<bool, String> {
     show_settings(&app);
     Ok(true)
+}
+
+#[tauri::command]
+pub fn preview_image(app: AppHandle, src: String, alt: String) -> Result<bool, String> {
+    if src.trim().is_empty() {
+        return Err("Image source is empty".to_string());
+    }
+
+    let payload = ImagePreviewContent { src, alt };
+    {
+        let state = app.state::<AppState>();
+        let mut image_preview = state.image_preview.lock().unwrap_or_else(|e| e.into_inner());
+        *image_preview = Some(payload.clone());
+    }
+
+    if let Some(window) = app.get_webview_window("image-preview") {
+        let _ = window.emit("image-preview-updated", &payload);
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(true);
+    }
+
+    let title = settings::load_settings_from_file()
+        .ok()
+        .and_then(|s| s.locale)
+        .filter(|locale| locale == "zh-CN")
+        .map(|_| "图片预览")
+        .unwrap_or("Image Preview");
+
+    let window = WebviewWindowBuilder::new(
+        &app,
+        "image-preview",
+        WebviewUrl::App("index.html?window=image-preview".into()),
+    )
+    .title(title)
+    .inner_size(860.0, 640.0)
+    .min_inner_size(360.0, 260.0)
+    .resizable(true)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .center()
+    .build();
+
+    match window {
+        Ok(win) => {
+            let _ = win.show();
+            let _ = win.set_focus();
+            Ok(true)
+        }
+        Err(e) => Err(format!("Failed to create image preview window: {}", e)),
+    }
+}
+
+#[tauri::command]
+pub fn get_image_preview_content(app: AppHandle) -> Result<ImagePreviewContent, String> {
+    let state = app.state::<AppState>();
+    let image_preview = state.image_preview.lock().unwrap_or_else(|e| e.into_inner());
+    image_preview
+        .clone()
+        .ok_or_else(|| "No image preview available".to_string())
 }
 
 #[tauri::command]

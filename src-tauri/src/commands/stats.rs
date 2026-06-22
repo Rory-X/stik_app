@@ -5,6 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use super::folders::get_stik_folder;
+use super::settings;
 use super::versioning;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,12 +42,21 @@ pub fn format_capture_streak_label(days: u32) -> String {
     }
 }
 
+pub fn format_capture_streak_label_for_locale(days: u32, locale: Option<&str>) -> String {
+    if locale == Some("zh-CN") {
+        format!("连续 {} 天", days)
+    } else {
+        format_capture_streak_label(days)
+    }
+}
+
 #[tauri::command]
 pub fn get_capture_streak() -> Result<CaptureStreakStatus, String> {
     let days = calculate_and_persist_capture_streak()?;
+    let current_settings = settings::get_settings().unwrap_or_default();
     Ok(CaptureStreakStatus {
         days,
-        label: format_capture_streak_label(days),
+        label: format_capture_streak_label_for_locale(days, current_settings.locale.as_deref()),
     })
 }
 
@@ -202,5 +212,13 @@ mod tests {
     #[test]
     fn formats_streak_label_for_plural_days() {
         assert_eq!(format_capture_streak_label(5), "Streak: 5 days");
+    }
+
+    #[test]
+    fn formats_streak_label_for_simplified_chinese() {
+        assert_eq!(
+            format_capture_streak_label_for_locale(5, Some("zh-CN")),
+            "连续 5 天"
+        );
     }
 }

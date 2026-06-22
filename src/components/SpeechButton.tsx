@@ -17,6 +17,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { DictationStatus } from "@/types";
 import DictationSetupModal from "./DictationSetupModal";
+import { useI18n } from "@/i18n/react";
+import { translateBackendError } from "@/i18n/errors";
 import "@/styles/speech-button.css";
 
 interface SpeechButtonProps {
@@ -58,6 +60,7 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
     },
     ref,
   ) {
+    const { t } = useI18n();
     const [state, setState] = useState<DictationState>("idle");
     const [error, setError] = useState<string | null>(null);
     const [setupOpen, setSetupOpen] = useState(false);
@@ -128,6 +131,7 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
 
     // ── Subscribe to dictation events (once on mount) ──
     useEffect(() => {
+      mountedRef.current = true;
       const unlistenPartial = listen<{ text: string }>(
         "dictation:partial",
         (event) => {
@@ -148,7 +152,9 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
           if (!mountedRef.current) return;
           setState("idle");
           activelyRecordingRef.current = false;
-          setError(event.payload.message || "Dictation failed");
+          setError(
+            translateBackendError(event.payload.message || "Dictation failed", t),
+          );
         },
       );
 
@@ -157,7 +163,7 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
         unlistenPartial.then((fn) => fn());
         unlistenError.then((fn) => fn());
       };
-    }, []);
+    }, [t]);
 
     // ── Auto-clear error after 3 seconds ──
     useEffect(() => {
@@ -200,10 +206,10 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
       } catch (e) {
         if (mountedRef.current) {
           setState("idle");
-          setError(String(e));
+          setError(translateBackendError(e, t));
         }
       }
-    }, [language, activeModel, getInsertOrigin]);
+    }, [language, activeModel, getInsertOrigin, t]);
 
     const stopDictation = useCallback(async () => {
       activelyRecordingRef.current = false;
@@ -218,10 +224,10 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
       } catch (e) {
         if (mountedRef.current) {
           setState("idle");
-          setError(String(e));
+          setError(translateBackendError(e, t));
         }
       }
-    }, []);
+    }, [t]);
 
     const handleToggle = useCallback(async () => {
       if (state === "processing" || state === "starting") return;

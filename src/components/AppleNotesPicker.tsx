@@ -3,8 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { AppleNoteEntry, StikSettings } from "@/types";
 import { formatRelativeDate } from "@/utils/formatRelativeDate";
+import { useI18n } from "@/i18n/react";
+import { translateBackendError } from "@/i18n/errors";
 
 export default function AppleNotesPicker() {
+  const { locale, t } = useI18n();
   const [notes, setNotes] = useState<AppleNoteEntry[]>([]);
   const [filteredNotes, setFilteredNotes] = useState<AppleNoteEntry[]>([]);
   const [query, setQuery] = useState("");
@@ -33,7 +36,7 @@ export default function AppleNotesPicker() {
         if (msg.startsWith("FULL_DISK_ACCESS_REQUIRED")) {
           setNeedsPermission(true);
         } else {
-          setError(msg);
+          setError(translateBackendError(msg, t));
         }
       } finally {
         setIsLoading(false);
@@ -42,7 +45,7 @@ export default function AppleNotesPicker() {
 
     loadNotes();
     setTimeout(() => inputRef.current?.focus(), 100);
-  }, []);
+  }, [t]);
 
   // Filter notes when query changes
   useEffect(() => {
@@ -94,11 +97,11 @@ export default function AppleNotesPicker() {
 
         await getCurrentWindow().close();
       } catch (err) {
-        setError(String(err));
+        setError(translateBackendError(err, t));
         setIsImporting(false);
       }
     },
-    [isImporting, targetFolder]
+    [isImporting, targetFolder, t]
   );
 
   // Keyboard navigation
@@ -159,26 +162,25 @@ export default function AppleNotesPicker() {
           </svg>
         </div>
         <h2 className="text-sm font-semibold text-ink mb-2">
-          Full Disk Access Required
+          {t("appleNotes.fullDiskAccessTitle")}
         </h2>
         <p className="text-[12px] text-stone text-center mb-4 max-w-[340px] leading-relaxed">
-          Stik needs Full Disk Access to read your Apple Notes database.
-          Click below to open System Settings, then press <strong className="text-ink">+</strong> and add Stik from your Applications folder.
+          {t("appleNotes.fullDiskAccessDescription")}
         </p>
         <button
           onClick={() => invoke("open_full_disk_access_settings")}
           className="px-4 py-2.5 bg-coral text-white text-[12px] font-semibold rounded-lg hover:bg-coral/90 transition-colors mb-3"
         >
-          Open System Settings
+          {t("appleNotes.openSystemSettings")}
         </button>
         <p className="text-[10px] text-stone text-center max-w-[300px] leading-relaxed">
-          After adding Stik and enabling the toggle, restart the app
+          {t("appleNotes.restartHint")}
         </p>
         <button
           onClick={async () => await getCurrentWindow().close()}
           className="mt-4 px-3 py-1.5 text-[11px] text-stone hover:text-ink transition-colors"
         >
-          Close
+          {t("common.close")}
         </button>
       </div>
     );
@@ -189,7 +191,7 @@ export default function AppleNotesPicker() {
     return (
       <div className="w-full h-full bg-bg rounded-[14px] flex flex-col items-center justify-center p-6">
         <div className="text-coral text-sm font-medium mb-2">
-          Failed to load Apple Notes
+          {t("appleNotes.loadFailed")}
         </div>
         <div className="text-stone text-xs text-center max-w-[280px] mb-4">
           {error}
@@ -198,7 +200,7 @@ export default function AppleNotesPicker() {
           onClick={async () => await getCurrentWindow().close()}
           className="px-4 py-2 text-xs bg-line hover:bg-line/70 text-ink rounded-lg transition-colors"
         >
-          Close
+          {t("common.close")}
         </button>
       </div>
     );
@@ -232,7 +234,7 @@ export default function AppleNotesPicker() {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search Apple Notes..."
+            placeholder={t("appleNotes.search")}
             className="flex-1 bg-transparent text-[15px] text-ink placeholder:text-stone outline-none"
           />
           {isLoading && (
@@ -245,13 +247,13 @@ export default function AppleNotesPicker() {
       <div ref={resultsRef} className="flex-1 overflow-y-auto">
         {isLoading ? (
           <div className="p-4 text-center text-stone text-sm">
-            Loading Apple Notes...
+            {t("appleNotes.loading")}
           </div>
         ) : filteredNotes.length === 0 ? (
           <div className="p-4 text-center text-stone text-sm">
             {query.trim()
-              ? `No notes matching "${query}"`
-              : "No notes found in Apple Notes"}
+              ? t("appleNotes.noMatching", { query })
+              : t("appleNotes.noNotes")}
           </div>
         ) : (
           filteredNotes.map((note, index) => (
@@ -271,7 +273,7 @@ export default function AppleNotesPicker() {
                   {note.folder_name}
                 </span>
                 <span className="text-[10px] text-stone font-mono">
-                  {formatRelativeDate(note.modified_date)}
+                  {formatRelativeDate(note.modified_date, locale)}
                 </span>
                 {note.account_name !== "Local" && (
                   <span className="text-[9px] text-stone/60">
@@ -280,7 +282,7 @@ export default function AppleNotesPicker() {
                 )}
               </div>
               <p className="text-[14px] font-medium text-ink leading-relaxed truncate">
-                {note.title || "Untitled"}
+                {note.title || t("appleNotes.untitled")}
               </p>
               {note.snippet && (
                 <p className="text-[12px] text-stone leading-relaxed mt-0.5 truncate">
@@ -302,18 +304,18 @@ export default function AppleNotesPicker() {
             <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">
               ↑↓
             </kbd>{" "}
-            navigate
+            {t("command.footer.navigate")}
           </span>
           <span>
             <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">
               ↵
             </kbd>{" "}
-            import
+            {t("appleNotes.import")}
           </span>
         </div>
         <span>
           <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">esc</kbd>{" "}
-          close
+          {t("command.footer.close")}
         </span>
       </div>
     </div>

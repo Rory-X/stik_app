@@ -67,6 +67,10 @@ import {
 } from "@/utils/externalLinkHitTest";
 import { markdownToHtml, markdownToPlainText } from "@/utils/markdownToHtml";
 import { createVimCommandCallbacks } from "@/utils/vimCommandBridge";
+import {
+  IMAGE_PREVIEW_REQUEST_EVENT,
+  type ImagePreviewPayload,
+} from "@/utils/imagePreviewEvent";
 import FormattingToolbar from "@/components/FormattingToolbar";
 import LinkPopover from "@/components/LinkPopover";
 import type { SearchResult } from "@/types";
@@ -85,6 +89,7 @@ interface EditorProps {
   onVimCloseWithoutSaving?: () => void;
   onImagePaste?: (file: File) => Promise<string | null>;
   onImageDropPath?: (path: string) => Promise<string | null>;
+  onImagePreview?: (payload: ImagePreviewPayload) => void;
   onWikiLinkClick?: (slug: string, path: string) => void;
   onCursorChange?: (head: number, anchor: number) => void;
 }
@@ -117,6 +122,7 @@ const Editor = forwardRef<EditorRef, EditorProps>(
       onVimCloseWithoutSaving,
       onImagePaste,
       onImageDropPath,
+      onImagePreview,
       onWikiLinkClick,
       onCursorChange,
     },
@@ -143,6 +149,8 @@ const Editor = forwardRef<EditorRef, EditorProps>(
     onImagePasteRef.current = onImagePaste;
     const onImageDropPathRef = useRef(onImageDropPath);
     onImageDropPathRef.current = onImageDropPath;
+    const onImagePreviewRef = useRef(onImagePreview);
+    onImagePreviewRef.current = onImagePreview;
     const onWikiLinkClickRef = useRef(onWikiLinkClick);
     onWikiLinkClickRef.current = onWikiLinkClick;
     const onCursorChangeRef = useRef(onCursorChange);
@@ -582,6 +590,28 @@ const Editor = forwardRef<EditorRef, EditorProps>(
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
     // ^ Intentionally empty deps: CM view is created once per mount.
     // Parent uses key={vimEnabled} to force remount when vim toggled.
+
+    useEffect(() => {
+      const container = containerRef.current;
+      if (!container) return;
+
+      const handleImagePreview = (event: Event) => {
+        const detail = (event as CustomEvent<ImagePreviewPayload>).detail;
+        if (!detail?.src) return;
+        onImagePreviewRef.current?.(detail);
+      };
+
+      container.addEventListener(
+        IMAGE_PREVIEW_REQUEST_EVENT,
+        handleImagePreview,
+      );
+      return () => {
+        container.removeEventListener(
+          IMAGE_PREVIEW_REQUEST_EVENT,
+          handleImagePreview,
+        );
+      };
+    }, []);
 
     // Tauri native drag-drop fallback (WebKit dataTransfer can be empty for OS-level drops)
     useEffect(() => {

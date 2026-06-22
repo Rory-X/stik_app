@@ -24,6 +24,9 @@ npm-debug.log*
 
 # Internal strategy docs (not public)
 .internal/
+.dev-home/
+.superpowers/
+docs/superpowers/
 
 # Local dev-only scripts (not shipped to users)
 scripts/dev-rebuild.sh

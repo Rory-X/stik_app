@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useI18n } from "@/i18n/react";
 
 interface ConfirmDialogProps {
   title: string;
@@ -11,10 +12,12 @@ interface ConfirmDialogProps {
 export default function ConfirmDialog({
   title,
   description,
-  confirmLabel = "Delete",
+  confirmLabel,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  const { t } = useI18n();
+
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -54,21 +57,21 @@ export default function ConfirmDialog({
             onClick={onCancel}
             className="px-4 py-2 text-[12px] bg-line hover:bg-line/70 text-ink rounded-lg transition-colors"
           >
-            Cancel
+            {t("common.cancel")}
           </button>
           <button
             onClick={onConfirm}
             className="px-4 py-2 text-[12px] bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors"
           >
-            {confirmLabel}
+            {confirmLabel ?? t("common.delete")}
           </button>
         </div>
         <div className="flex items-center justify-center mt-4 text-[10px] text-stone">
           <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px] font-mono">esc</kbd>
-          <span className="ml-1">cancel</span>
+          <span className="ml-1">{t("common.cancelShortcut")}</span>
           <span className="mx-2">&middot;</span>
           <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px] font-mono">enter</kbd>
-          <span className="ml-1">confirm</span>
+          <span className="ml-1">{t("common.confirmShortcut")}</span>
         </div>
       </div>
     </div>

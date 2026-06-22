@@ -1,10 +1,10 @@
 # Homebrew Cask Template for Stik
 #
 # Setup instructions:
-#   1. Create a new repo: github.com/0xMassi/homebrew-stik
+#   1. Create a new repo: github.com/Rory-X/homebrew-stik
 #   2. Place this file at: Casks/stik.rb
 #   3. After each release, update `version` and `sha256`
-#   4. Users install with: brew install --cask 0xMassi/stik/stik
+#   4. Users install with: brew install --cask Rory-X/stik/stik
 #
 # To calculate SHA256 after a release:
 #   shasum -a 256 Stik_<version>_aarch64.dmg
@@ -17,10 +17,10 @@ cask "stik" do
   sha256 arm:   "REPLACE_WITH_ARM64_SHA256",
          intel: "REPLACE_WITH_X64_SHA256"
 
-  url "https://github.com/0xMassi/stik_app/releases/download/v#{version}/Stik_#{version}_#{arch}.dmg"
+  url "https://github.com/Rory-X/stik_app/releases/download/v#{version}/Stik_#{version}_#{arch}.dmg"
   name "Stik"
   desc "Instant thought capture - one shortcut, post-it appears, type, close"
-  homepage "https://github.com/0xMassi/stik_app"
+  homepage "https://github.com/Rory-X/stik_app"
 
   depends_on macos: ">= :catalina"
 

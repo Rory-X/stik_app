@@ -5,6 +5,20 @@ All notable changes to Stik will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-06-23
+Localization, settings access, image preview, and folder note visibility
+
+### Added
+- **Chinese and English localization** — app text now routes through an i18n layer with English and Simplified Chinese locale packs
+- **Language onboarding** — first launch prompts for a language choice and persists it in settings
+- **Settings entry points** — settings can be opened from app surfaces and the tray, making configuration discoverable
+- **Dedicated image preview window** — markdown images can be opened via a hover preview button and inspected with zoom, pan, reset, and keyboard escape
+
+### Fixed
+- **Folder note lists were capped at recent notes** — the command/search panel now shows every note returned for the selected folder instead of truncating the list
+- **Image click behavior conflict** — clicking image content can still reveal/edit the markdown path, while preview opens only from the explicit hover button
+- **Fork release target** — release/update URLs now point at `Rory-X/stik_app`, and the signed CI release workflow is gated behind an explicit repository variable
+
 ## [0.8.0] - 2026-04-13
 Voice dictation, clipboard capture, and dev tooling
 
@@ -458,6 +472,9 @@ First release
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 0.8.1 | 2026-06-23 | Chinese/English localization, settings entry points, image preview zoom, full folder note lists |
+| 0.8.0 | 2026-04-13 | Voice dictation, clipboard capture, and dev tooling |
+| 0.7.9 | 2026-03-17 | Local file watcher and auto-refresh on external changes |
 | 0.7.8 | 2026-03-11 | Hotfix: DarwinKit sidecar path resolution + CI universal binary fix |
 | 0.7.7 | 2026-03-10 | Hotfix: remove restricted iCloud entitlements blocking app launch |
 | 0.7.6 | 2026-03-10 | Note locking (AES-256-GCM + Touch ID), iCloud sync, storage abstraction, window positioning fix |
@@ -486,6 +503,9 @@ First release
 | 0.2.0 | 2026-02-06 | Security hardening, performance index, architecture refactor |
 | 0.1.0 | 2026-02-05 | Initial release - core capture, search, manager |
 
+[0.8.1]: https://github.com/Rory-X/stik_app/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/0xMassi/stik_app/compare/v0.7.9...v0.8.0
+[0.7.9]: https://github.com/0xMassi/stik_app/compare/v0.7.8...v0.7.9
 [0.7.8]: https://github.com/0xMassi/stik_app/compare/v0.7.7...v0.7.8
 [0.7.7]: https://github.com/0xMassi/stik_app/compare/v0.7.6...v0.7.7
 [0.7.6]: https://github.com/0xMassi/stik_app/compare/v0.7.5...v0.7.6

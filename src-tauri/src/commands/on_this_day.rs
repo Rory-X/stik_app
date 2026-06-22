@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use super::folders::get_stik_folder;
 use super::macos_notify;
+use super::settings;
 use super::versioning;
 
 const PREVIEW_MAX_LEN: usize = 120;
@@ -41,13 +42,15 @@ pub fn check_on_this_day_now() -> Result<OnThisDayStatus, String> {
 }
 
 fn check_on_this_day(force: bool, show_notification: bool) -> Result<OnThisDayStatus, String> {
+    let current_settings = settings::get_settings().unwrap_or_default();
+    let locale = current_settings.locale.as_deref();
     let today = Local::now().date_naive();
     let state = load_state()?;
 
     if !force && !should_notify_today(state.last_notified_date.as_deref(), today) {
         return Ok(OnThisDayStatus {
             found: false,
-            message: "On This Day already shown today".to_string(),
+            message: on_this_day_message("already_shown", locale).to_string(),
             date: None,
             folder: None,
             preview: None,
@@ -58,7 +61,7 @@ fn check_on_this_day(force: bool, show_notification: bool) -> Result<OnThisDaySt
     let Some(candidate) = select_best_candidate(&candidates) else {
         return Ok(OnThisDayStatus {
             found: false,
-            message: "No On This Day note found".to_string(),
+            message: on_this_day_message("none", locale).to_string(),
             date: None,
             folder: None,
             preview: None,
@@ -66,7 +69,7 @@ fn check_on_this_day(force: bool, show_notification: bool) -> Result<OnThisDaySt
     };
 
     if show_notification {
-        let title = "On This Day";
+        let title = on_this_day_message("title", locale);
         let subtitle = &format!(
             "{} ({})",
             candidate.folder,
@@ -82,11 +85,26 @@ fn check_on_this_day(force: bool, show_notification: bool) -> Result<OnThisDaySt
 
     Ok(OnThisDayStatus {
         found: true,
-        message: "On This Day note found".to_string(),
+        message: on_this_day_message("found", locale).to_string(),
         date: Some(candidate.date.format("%Y-%m-%d").to_string()),
         folder: Some(candidate.folder),
         preview: Some(candidate.preview),
     })
+}
+
+fn on_this_day_message(key: &str, locale: Option<&str>) -> &'static str {
+    let zh_cn = locale == Some("zh-CN");
+    match (key, zh_cn) {
+        ("title", true) => "往年今日",
+        ("already_shown", true) => "今天已经显示过往年今日",
+        ("none", true) => "没有找到往年今日笔记",
+        ("found", true) => "已找到往年今日笔记",
+        ("title", false) => "On This Day",
+        ("already_shown", false) => "On This Day already shown today",
+        ("none", false) => "No On This Day note found",
+        ("found", false) => "On This Day note found",
+        _ => "",
+    }
 }
 
 fn collect_candidates(today: NaiveDate) -> Result<Vec<OnThisDayCandidate>, String> {
@@ -253,5 +271,17 @@ mod tests {
     fn builds_single_line_preview() {
         let preview = build_preview("\nFirst line\n\nSecond line\n");
         assert_eq!(preview, "First line Second line");
+    }
+
+    #[test]
+    fn localizes_status_messages() {
+        assert_eq!(
+            on_this_day_message("found", Some("zh-CN")),
+            "已找到往年今日笔记"
+        );
+        assert_eq!(
+            on_this_day_message("none", Some("zh-CN")),
+            "没有找到往年今日笔记"
+        );
     }
 }
