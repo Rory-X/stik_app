@@ -5,6 +5,12 @@ All notable changes to Stik will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-06-23
+Hotfix for packaged app image rendering
+
+### Fixed
+- **Images failed to load after installing the macOS release** — packaged builds now allow Tauri's `asset://` image protocol in the app CSP, so pasted and dropped note images render again after installation
+
 ## [0.8.1] - 2026-06-23
 Localization, settings access, image preview, and folder note visibility
 
