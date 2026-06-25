@@ -4,6 +4,18 @@ import {
   normalizeNoteSnippet,
 } from "@/utils/notePresentation";
 
+interface CreatedNoteSaveResult {
+  path: string;
+  folder: string;
+  filename: string;
+}
+
+interface CreatedNoteOpenPayload {
+  path: string;
+  folder: string;
+  content: string;
+}
+
 /** Derive a human-readable title from a Stik filename like `20260310-114522-my-note-a1b2.md`. */
 export function titleFromStikFilename(filename: string): string {
   const stem = filename.replace(/\.md$/i, "");
@@ -26,4 +38,17 @@ export function noteInfosToSearchResults(notes: NoteInfo[]): SearchResult[] {
     created: note.created,
     locked: note.locked,
   }));
+}
+
+export function createdNoteOpenPayload(
+  saved: CreatedNoteSaveResult,
+  content: string,
+): CreatedNoteOpenPayload | null {
+  if (!saved.path) return null;
+
+  return {
+    path: saved.path,
+    folder: saved.folder,
+    content,
+  };
 }

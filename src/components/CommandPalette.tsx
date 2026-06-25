@@ -9,7 +9,10 @@ import type {
   FolderStats,
   StikSettings,
 } from "@/types";
-import { noteInfosToSearchResults } from "@/utils/commandPaletteNotes";
+import {
+  createdNoteOpenPayload,
+  noteInfosToSearchResults,
+} from "@/utils/commandPaletteNotes";
 import ConfirmDialog from "./ConfirmDialog";
 import LockPrompt from "./LockPrompt";
 import FolderSidebar from "./command-palette/FolderSidebar";
@@ -482,24 +485,21 @@ export default function CommandPalette() {
 
     try {
       const content = `# ${title}\n\n`;
-      await invoke("save_note", { folder: targetFolder, content });
+      const saved = await invoke<{
+        path: string;
+        folder: string;
+        filename: string;
+      }>("save_note", { folder: targetFolder, content });
       setIsCreatingNote(false);
       setNewNoteTitle("");
       await refreshAfterChange();
 
-      // Open the newly created note (it's the most recent one)
-      const notes = await invoke<NoteInfo[]>("list_notes", {
-        folder: targetFolder,
-      });
-      if (notes.length > 0) {
-        const newest = notes[0];
-        const noteContent = await invoke<string>("get_note_content", {
-          path: newest.path,
-        });
+      const openPayload = createdNoteOpenPayload(saved, content);
+      if (openPayload) {
         await invoke("open_note_for_viewing", {
-          content: noteContent,
-          folder: newest.folder,
-          path: newest.path,
+          content: openPayload.content,
+          folder: openPayload.folder,
+          path: openPayload.path,
         });
         closePalette();
       }
