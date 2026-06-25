@@ -9,6 +9,32 @@ export interface StickedNote {
   originalPath?: string;
 }
 
+export type SessionDraftKind = "new" | "edit";
+
+export interface SessionDraftCursor {
+  head: number;
+  anchor: number;
+}
+
+export interface SessionDraftGeometry {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface SessionDraftSnapshot {
+  id: string;
+  kind: SessionDraftKind;
+  content: string;
+  folder: string;
+  originalPath?: string | null;
+  baseModifiedAt?: string | null;
+  cursor?: SessionDraftCursor | null;
+  geometry?: SessionDraftGeometry | null;
+  updatedAt: string;
+}
+
 export interface ShortcutMapping {
   shortcut: string;
   folder: string;
@@ -110,9 +136,15 @@ export interface StikSettings {
   dictation?: DictationSettings;
 }
 
+export type ChineseScriptPreference =
+  | "simplified"
+  | "traditional"
+  | "preserve";
+
 export interface DictationSettings {
   active_model: string | null;
   active_language: string | null;
+  chinese_script?: ChineseScriptPreference;
   enabled: boolean;
 }
 

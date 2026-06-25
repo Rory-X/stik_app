@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import { insertLink } from "./cm-formatting";
+import { insertLink, toggleCodeBlock } from "./cm-formatting";
 
 function createMockView(doc: string, anchor: number, head = anchor): EditorView {
   let state = EditorState.create({
@@ -38,5 +38,35 @@ describe("insertLink", () => {
     expect(view.state.doc.toString()).toBe("[text](url)");
     const { from, to } = view.state.selection.main;
     expect(view.state.sliceDoc(from, to)).toBe("text");
+  });
+});
+
+describe("toggleCodeBlock", () => {
+  it("wraps selected text in a fenced code block with language", () => {
+    const view = createMockView("const n = 1;", 0, 12);
+
+    toggleCodeBlock(view, "typescript");
+
+    expect(view.state.doc.toString()).toBe(
+      "```typescript\nconst n = 1;\n```",
+    );
+  });
+
+  it("inserts an empty fenced code block at the cursor", () => {
+    const view = createMockView("", 0);
+
+    toggleCodeBlock(view, "plaintext");
+
+    expect(view.state.doc.toString()).toBe("```plaintext\n\n```");
+    expect(view.state.selection.main.head).toBe("```plaintext\n".length);
+  });
+
+  it("unwraps a selected fenced code block", () => {
+    const doc = "```python\nprint('hi')\n```";
+    const view = createMockView(doc, 0, doc.length);
+
+    toggleCodeBlock(view, "python");
+
+    expect(view.state.doc.toString()).toBe("print('hi')");
   });
 });

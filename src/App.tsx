@@ -11,7 +11,7 @@ import AppleNotesPicker from "./components/AppleNotesPicker";
 import LanguageOnboarding from "./components/LanguageOnboarding";
 import ImagePreviewWindow from "./components/ImagePreviewWindow";
 import { useTheme } from "./hooks/useTheme";
-import type { StickedNote, StikSettings } from "@/types";
+import type { SessionDraftSnapshot, StickedNote, StikSettings } from "@/types";
 import { isMarkdownEffectivelyEmpty } from "@/utils/normalizeMarkdownForCopy";
 import { shouldHideCaptureOnBlur } from "@/utils/blurAutoHide";
 import { resolveCaptureFolder } from "@/utils/folderSelection";
@@ -23,7 +23,8 @@ type WindowType =
   | "settings"
   | "command-palette"
   | "apple-notes-picker"
-  | "image-preview";
+  | "image-preview"
+  | "session-draft";
 const PENDING_UPDATE_KEY = "stik_pending_update_version";
 
 function getWindowInfo(): { type: WindowType; id?: string; viewing?: boolean } {
@@ -58,6 +59,10 @@ function getWindowInfo(): { type: WindowType; id?: string; viewing?: boolean } {
     return { type: "image-preview" };
   }
 
+  if (windowType === "session-draft") {
+    return { type: "session-draft", id: params.get("id") || undefined };
+  }
+
   return { type: "postit" };
 }
 
@@ -66,6 +71,8 @@ export default function App() {
   const { t } = useI18n();
   const [currentFolder, setCurrentFolder] = useState("");
   const [stickedNote, setStickedNote] = useState<StickedNote | null>(null);
+  const [sessionDraft, setSessionDraft] =
+    useState<SessionDraftSnapshot | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const contentRef = useRef("");
   const blurIgnoreUntilRef = useRef(0);
@@ -180,6 +187,29 @@ export default function App() {
         setLoadError(String(error));
       });
   }, [windowInfo.type, windowInfo.id, windowInfo.viewing]);
+
+  // Load recovered session draft data if this is a restored draft window.
+  useEffect(() => {
+    if (windowInfo.type !== "session-draft" || !windowInfo.id) return;
+
+    let cancelled = false;
+
+    invoke<SessionDraftSnapshot>("get_session_draft", { id: windowInfo.id })
+      .then((draft) => {
+        if (cancelled) return;
+        setSessionDraft(draft);
+        setCurrentFolder(draft.folder);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("Failed to load session draft:", error);
+        setLoadError(String(error));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [windowInfo.type, windowInfo.id]);
 
   // Hide postit on blur only when editor is empty
   useEffect(() => {
@@ -398,11 +428,51 @@ export default function App() {
     [currentFolder, resolveFolder],
   );
 
+  const handleSessionDraftSave = useCallback(
+    async (
+      content: string,
+      preferredFolder?: string,
+    ): Promise<string | undefined> => {
+      if (!sessionDraft) return undefined;
+
+      if (sessionDraft.kind === "edit" && sessionDraft.originalPath) {
+        await invoke("update_note", {
+          path: sessionDraft.originalPath,
+          content,
+        });
+        return sessionDraft.originalPath;
+      }
+
+      const resolvedFolder = await resolveFolder(
+        preferredFolder ?? sessionDraft.folder,
+      );
+
+      if (resolvedFolder !== currentFolder) {
+        setCurrentFolder(resolvedFolder);
+      }
+
+      const result = await invoke<{ path: string }>("save_note", {
+        folder: resolvedFolder,
+        content,
+      });
+      return result.path || undefined;
+    },
+    [currentFolder, resolveFolder, sessionDraft],
+  );
+
   const handleClose = useCallback(async () => {
     try {
       await invoke("hide_window");
     } catch (error) {
       console.error("Failed to hide window:", error);
+    }
+  }, []);
+
+  const handleSessionDraftClose = useCallback(async () => {
+    try {
+      await getCurrentWindow().close();
+    } catch (error) {
+      console.error("Failed to close session draft window:", error);
     }
   }, []);
 
@@ -431,6 +501,53 @@ export default function App() {
 
   if (windowInfo.type === "image-preview") {
     return <ImagePreviewWindow />;
+  }
+
+  if (windowInfo.type === "session-draft") {
+    if (loadError) {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-bg rounded-[14px] gap-3 p-6">
+          <div className="text-coral text-sm font-medium">
+            {t("sticked.loadFailed")}
+          </div>
+          <div className="text-stone text-xs text-center max-w-[280px]">
+            {loadError}
+          </div>
+          <button
+            onClick={handleSessionDraftClose}
+            className="mt-2 px-4 py-2 text-xs bg-line hover:bg-line/70 text-ink rounded-lg transition-colors"
+          >
+            {t("common.close")}
+          </button>
+        </div>
+      );
+    }
+
+    if (!sessionDraft) {
+      return (
+        <div className="w-full h-full flex items-center justify-center bg-bg rounded-[14px]">
+          <div className="text-stone text-sm">{t("common.loading")}</div>
+        </div>
+      );
+    }
+
+    return (
+      <PostIt
+        folder={currentFolder}
+        onSave={handleSessionDraftSave}
+        onClose={handleSessionDraftClose}
+        onFolderChange={handleFolderChange}
+        initialContent={sessionDraft.content}
+        sessionDraftId={sessionDraft.id}
+        sessionDraftKind={sessionDraft.kind}
+        sessionDraftOriginalPath={sessionDraft.originalPath ?? undefined}
+        sessionDraftBaseModifiedAt={
+          sessionDraft.baseModifiedAt ?? undefined
+        }
+        sessionDraftCursor={sessionDraft.cursor ?? undefined}
+        isRecoveredSessionDraft={true}
+      />
+    );
   }
 
   // Render sticked note if this is a sticked window

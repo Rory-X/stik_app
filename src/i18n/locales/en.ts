@@ -150,6 +150,7 @@ export const en = {
   "format.italic": "Italic",
   "format.strikethrough": "Strikethrough",
   "format.inlineCode": "Inline code",
+  "format.codeBlock": "Code block",
   "format.addLink": "Add link",
   "format.addLinkNeedsSelection": "Add link (select text first)",
   "format.blockquote": "Blockquote",
@@ -171,6 +172,9 @@ export const en = {
   "imagePreview.zoomIn": "Zoom in",
   "imagePreview.zoomOut": "Zoom out",
   "imagePreview.resetZoom": "Reset zoom",
+  "imagePreview.copyImage": "Copy image",
+  "imagePreview.copiedImage": "Copied",
+  "imagePreview.copyImageFailed": "Copy failed",
   "shortcut.clickToRecord": "Click to record",
   "shortcut.pressKeys": "Press keys...",
   "shortcut.holdModifierHint": "Hold Cmd, Ctrl, Shift, or Option with a key",
@@ -278,6 +282,12 @@ export const en = {
   "dictation.settings.language": "Dictation language",
   "dictation.settings.languageHint":
     "Auto-detect works for most cases. Pick a specific language for the best accuracy.",
+  "dictation.settings.chineseScript": "Chinese output",
+  "dictation.settings.chineseScriptHint":
+    "Applies to Chinese dictation partials and final text before insertion.",
+  "dictation.settings.chineseScript.simplified": "Simplified Chinese",
+  "dictation.settings.chineseScript.traditional": "Traditional Chinese",
+  "dictation.settings.chineseScript.preserve": "Keep model output",
   "dictation.settings.models": "Models",
   "dictation.settings.active": "Active",
   "dictation.settings.loading": "Loading... {seconds}s",
@@ -622,4 +632,5 @@ export const en = {
   "command.toast.noteUnlocked": "Note unlocked",
   "command.toast.noteLocked": "Note locked",
   "command.toast.openFailed": "Couldn't open note: {error}",
+  "command.toast.noteMoved": "Moved to {folder}",
 } as const;

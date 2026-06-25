@@ -94,6 +94,8 @@ pub struct DictationSettings {
     pub active_model: Option<String>,
     /// ISO language code ("en", "it", …) or None for auto-detect.
     pub active_language: Option<String>,
+    /// Chinese dictation output script: simplified, traditional, or preserve.
+    pub chinese_script: String,
     /// Master toggle for the dictation feature.
     pub enabled: bool,
 }
@@ -103,6 +105,7 @@ impl Default for DictationSettings {
         Self {
             active_model: None,
             active_language: None,
+            chinese_script: "simplified".to_string(),
             enabled: true,
         }
     }
@@ -300,6 +303,10 @@ fn is_valid_active_theme(active_theme: &str, custom_themes: &[CustomThemeDefinit
         || custom_themes.iter().any(|theme| theme.id == active_theme)
 }
 
+fn is_valid_chinese_script(value: &str) -> bool {
+    matches!(value, "simplified" | "traditional" | "preserve")
+}
+
 fn normalize_loaded_settings(mut settings: StikSettings) -> StikSettings {
     // The UI has no enable/disable toggle — users delete shortcuts to remove them.
     // Force all visible shortcuts to enabled so stale disabled state can't persist.
@@ -319,6 +326,10 @@ fn normalize_loaded_settings(mut settings: StikSettings) -> StikSettings {
         } else {
             String::new()
         };
+    }
+
+    if !is_valid_chinese_script(&settings.dictation.chinese_script) {
+        settings.dictation.chinese_script = "simplified".to_string();
     }
 
     settings
@@ -591,5 +602,22 @@ mod tests {
 
         assert_eq!(settings.locale, None);
         assert!(!settings.has_completed_onboarding);
+    }
+
+    #[test]
+    fn dictation_defaults_to_simplified_chinese_output() {
+        let settings = StikSettings::default();
+
+        assert_eq!(settings.dictation.chinese_script, "simplified");
+    }
+
+    #[test]
+    fn normalization_resets_invalid_dictation_chinese_script() {
+        let mut settings = StikSettings::default();
+        settings.dictation.chinese_script = "unsupported".to_string();
+
+        let normalized = normalize_loaded_settings(settings);
+
+        assert_eq!(normalized.dictation.chinese_script, "simplified");
     }
 }

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { FolderStats } from "@/types";
 import { FOLDER_COLORS, FOLDER_COLOR_KEYS, getFolderColor } from "@/utils/folderColors";
 import { useI18n } from "@/i18n/react";
@@ -23,6 +24,8 @@ interface FolderSidebarProps {
   onRenameFolder: () => void;
   onCancelRename: () => void;
   position?: "left" | "right";
+  draggedNoteFolder?: string | null;
+  onDropNoteOnFolder?: (folderName: string) => void;
 }
 
 export default function FolderSidebar({
@@ -46,8 +49,11 @@ export default function FolderSidebar({
   onRenameFolder,
   onCancelRename,
   position = "left",
+  draggedNoteFolder = null,
+  onDropNoteOnFolder,
 }: FolderSidebarProps) {
   const { t } = useI18n();
+  const [dragOverFolder, setDragOverFolder] = useState<string | null>(null);
   const borderClass = position === "left" ? "border-r" : "border-l";
 
   return (
@@ -82,13 +88,37 @@ export default function FolderSidebar({
           const isSelected = selectedFolder === folder.name;
           const isCurrentlyRenaming = isRenaming && renamingFolder === folder.name;
           const color = getFolderColor(folder.name, folderColors);
+          const canDropNote =
+            Boolean(onDropNoteOnFolder) &&
+            Boolean(draggedNoteFolder) &&
+            draggedNoteFolder !== folder.name;
+          const isDropTarget = canDropNote && dragOverFolder === folder.name;
 
           return (
             <div key={folder.name}>
               <button
                 onClick={() => onSelectFolder(folder.name)}
+                onDragOver={(event) => {
+                  if (!canDropNote) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  setDragOverFolder(folder.name);
+                }}
+                onDragLeave={() => {
+                  if (dragOverFolder === folder.name) {
+                    setDragOverFolder(null);
+                  }
+                }}
+                onDrop={(event) => {
+                  if (!canDropNote) return;
+                  event.preventDefault();
+                  setDragOverFolder(null);
+                  onDropNoteOnFolder?.(folder.name);
+                }}
                 className={`w-full px-3 py-2 flex items-center gap-2 text-left text-[12px] transition-colors ${
-                  isSelected
+                  isDropTarget
+                    ? "bg-coral/20 text-coral ring-1 ring-inset ring-coral/50"
+                    : isSelected
                     ? focused
                       ? "bg-coral text-white"
                       : "bg-coral/10 text-coral"

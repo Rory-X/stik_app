@@ -16,6 +16,11 @@ export default function ImagePreviewWindow() {
   const [failed, setFailed] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    status: "idle" | "copying" | "copied" | "failed";
+  } | null>(null);
   const dragRef = useRef<{
     pointerId: number;
     startX: number;
@@ -29,13 +34,18 @@ export default function ImagePreviewWindow() {
     setPan({ x: 0, y: 0 });
   }, []);
 
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
   const setPreviewImage = useCallback(
     (payload: ImagePreviewPayload) => {
       setImage(payload);
       setFailed(false);
+      closeContextMenu();
       resetView();
     },
-    [resetView],
+    [closeContextMenu, resetView],
   );
 
   const zoomBy = useCallback((direction: 1 | -1) => {
@@ -70,7 +80,11 @@ export default function ImagePreviewWindow() {
     const handleKeyDown = async (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        await getCurrentWindow().close();
+        if (contextMenu) {
+          closeContextMenu();
+        } else {
+          await getCurrentWindow().close();
+        }
       } else if (event.key === "+" || event.key === "=") {
         event.preventDefault();
         zoomBy(1);
@@ -85,7 +99,71 @@ export default function ImagePreviewWindow() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [resetView, zoomBy]);
+  }, [closeContextMenu, contextMenu, resetView, zoomBy]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (
+        (event.target as HTMLElement | null)?.closest(
+          ".image-preview-context-menu",
+        )
+      ) {
+        return;
+      }
+      closeContextMenu();
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [closeContextMenu, contextMenu]);
+
+  const openContextMenu = useCallback(
+    (event: React.MouseEvent) => {
+      if (!image || failed) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        status: "idle",
+      });
+    },
+    [failed, image],
+  );
+
+  const copyPreviewImage = useCallback(async () => {
+    if (!image || contextMenu?.status === "copying") return;
+
+    setContextMenu((current) =>
+      current ? { ...current, status: "copying" } : current,
+    );
+
+    try {
+      await invoke("copy_preview_image_to_clipboard", { src: image.src });
+      setContextMenu((current) =>
+        current ? { ...current, status: "copied" } : current,
+      );
+      window.setTimeout(() => {
+        setContextMenu(null);
+      }, 600);
+    } catch (error) {
+      console.error("Failed to copy preview image:", error);
+      setContextMenu((current) =>
+        current ? { ...current, status: "failed" } : current,
+      );
+    }
+  }, [contextMenu?.status, image]);
+
+  const copyLabel =
+    contextMenu?.status === "copying"
+      ? t("common.loading")
+      : contextMenu?.status === "copied"
+        ? t("imagePreview.copiedImage")
+        : contextMenu?.status === "failed"
+          ? t("imagePreview.copyImageFailed")
+          : t("imagePreview.copyImage");
 
   return (
     <div className="h-screen w-screen bg-bg text-ink rounded-[14px] overflow-hidden flex flex-col border border-line shadow-2xl">
@@ -177,6 +255,7 @@ export default function ImagePreviewWindow() {
           dragRef.current = null;
         }}
         onDoubleClick={resetView}
+        onContextMenu={openContextMenu}
       >
         {image && !failed ? (
           <img
@@ -199,6 +278,26 @@ export default function ImagePreviewWindow() {
           </div>
         )}
       </div>
+
+      {contextMenu && image && !failed && (
+        <div
+          className="image-preview-context-menu fixed z-50 min-w-36 rounded-md border border-line bg-surface shadow-xl p-1"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        >
+          <button
+            type="button"
+            onClick={copyPreviewImage}
+            disabled={contextMenu.status === "copying"}
+            className="w-full h-8 px-3 flex items-center text-left rounded text-xs font-medium text-ink hover:bg-line/70 disabled:opacity-60 disabled:cursor-default transition-colors"
+          >
+            {copyLabel}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

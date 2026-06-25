@@ -6,6 +6,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import type { EditorView } from "@codemirror/view";
 import {
   toggleInlineFormat,
+  toggleCodeBlock,
   toggleLinePrefix,
   insertLink,
   type FormatState,
@@ -154,6 +155,19 @@ export default function FormattingToolbar({
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="16 18 22 12 16 6" />
           <polyline points="8 6 2 12 8 18" />
+        </svg>
+      </button>
+
+      <button
+        className="fmt-btn"
+        onMouseDown={preventFocus}
+        onClick={() => cmd((view) => toggleCodeBlock(view, "plaintext"))}
+        title={t("format.codeBlock")}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <polyline points="10 9 7 12 10 15" />
+          <polyline points="14 9 17 12 14 15" />
         </svg>
       </button>
 

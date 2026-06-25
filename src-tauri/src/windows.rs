@@ -1,4 +1,4 @@
-use crate::commands::{notes, settings, sticked_notes};
+use crate::commands::{notes, session_drafts, settings, sticked_notes};
 use crate::state::{AppState, ImagePreviewContent, LastSavedNote};
 use sticked_notes::StickedNote;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
@@ -665,6 +665,91 @@ pub fn restore_sticked_notes(app: &AppHandle) {
             let _ = create_sticked_window(app.clone(), note);
         }
     }
+}
+
+pub fn restore_session_draft_windows(app: &AppHandle) {
+    let Ok(drafts) = session_drafts::list_session_drafts_inner() else {
+        return;
+    };
+
+    for draft in drafts {
+        if draft.content.trim().is_empty()
+            && matches!(draft.kind, session_drafts::SessionDraftKind::New)
+        {
+            continue;
+        }
+
+        let label = format!("draft-{}", safe_window_label(&draft.id));
+        if app.get_webview_window(&label).is_some() {
+            continue;
+        }
+
+        let (width, height) = draft
+            .geometry
+            .as_ref()
+            .map(|geometry| (geometry.width, geometry.height))
+            .unwrap_or((450.0, 320.0));
+        let url = format!(
+            "index.html?window=session-draft&id={}",
+            encode_query_component(&draft.id)
+        );
+
+        let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+            .title("Recovered Draft")
+            .inner_size(width, height)
+            .min_inner_size(320.0, 200.0)
+            .max_inner_size(900.0, 700.0)
+            .resizable(true)
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .visible(false)
+            .build();
+
+        if let Ok(win) = window {
+            if let Some(geometry) = draft.geometry {
+                let visible = is_window_visible_on_any_monitor(
+                    app,
+                    geometry.x,
+                    geometry.y,
+                    geometry.width,
+                    geometry.height,
+                );
+                if visible {
+                    let _ = win.set_position(tauri::Position::Physical(PhysicalPosition::new(
+                        geometry.x as i32,
+                        geometry.y as i32,
+                    )));
+                } else {
+                    let _ = win.center();
+                }
+            } else {
+                let _ = win.center();
+            }
+            let _ = win.show();
+        }
+    }
+}
+
+fn safe_window_label(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect()
+}
+
+fn encode_query_component(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char)
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
 }
 
 #[cfg(test)]

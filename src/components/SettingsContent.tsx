@@ -6,6 +6,7 @@ import type {
   CustomFontEntry,
   CustomTemplate,
   CustomThemeDefinition,
+  ChineseScriptPreference,
   DictationDownloadProgress,
   DictationModelInfo,
   DictationStatus,
@@ -2847,6 +2848,24 @@ const DICTATION_LANGUAGES: { code: string | null; label: string }[] = [
   { code: "uk", label: "Ukrainian" },
 ];
 
+const DICTATION_CHINESE_SCRIPT_OPTIONS: {
+  value: ChineseScriptPreference;
+  labelKey: MessageKey;
+}[] = [
+  {
+    value: "simplified",
+    labelKey: "dictation.settings.chineseScript.simplified",
+  },
+  {
+    value: "traditional",
+    labelKey: "dictation.settings.chineseScript.traditional",
+  },
+  {
+    value: "preserve",
+    labelKey: "dictation.settings.chineseScript.preserve",
+  },
+];
+
 function dictationSettingsLanguageKey(code: string | null): MessageKey {
   return code ? (`dictation.language.${code}` as MessageKey) : "dictation.language.auto";
 }
@@ -2891,6 +2910,7 @@ function DictationSettingsPanel({
   const dictation = settings.dictation ?? {
     active_model: null,
     active_language: null,
+    chinese_script: "simplified" as ChineseScriptPreference,
     enabled: true,
   };
 
@@ -3045,6 +3065,31 @@ function DictationSettingsPanel({
         />
         <p className="mt-1.5 text-[11px] text-stone">
           {t("dictation.settings.languageHint")}
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-[12px] text-stone mb-1.5">
+          {t("dictation.settings.chineseScript")}
+        </label>
+        <Dropdown
+          value={dictation.chinese_script ?? "simplified"}
+          options={DICTATION_CHINESE_SCRIPT_OPTIONS.map((option) => ({
+            value: option.value,
+            label: t(option.labelKey),
+          }))}
+          onChange={(value) =>
+            onSettingsChange({
+              ...settings,
+              dictation: {
+                ...dictation,
+                chinese_script: value as ChineseScriptPreference,
+              },
+            })
+          }
+        />
+        <p className="mt-1.5 text-[11px] text-stone">
+          {t("dictation.settings.chineseScriptHint")}
         </p>
       </div>
 

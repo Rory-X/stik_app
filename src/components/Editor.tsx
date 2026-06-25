@@ -22,7 +22,6 @@ import {
 import { defaultKeymap, history, historyKeymap, indentWithTab, insertNewline } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { syntaxTree } from "@codemirror/language";
-import { languages } from "@codemirror/language-data";
 import { autocompletion, closeCompletion, completionStatus } from "@codemirror/autocomplete";
 import { search, searchKeymap } from "@codemirror/search";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -56,6 +55,7 @@ import { highlightExtension } from "@/extensions/cm-highlight";
 import { taskCheckboxPlugin, taskCheckboxHandler } from "@/extensions/cm-task-toggle";
 import { hideMarkersPlugin, autoCloseMarkup } from "@/extensions/cm-hide-markers";
 import { headingFoldPlugin } from "@/extensions/cm-heading-fold";
+import { codeBlockLanguage } from "@/extensions/cm-code-languages";
 import { filenameToSlug } from "@/utils/wikiLink";
 import { normalizeUrl } from "@/utils/normalizeUrl";
 import { isImageUrl } from "@/utils/isImageUrl";
@@ -501,7 +501,7 @@ const Editor = forwardRef<EditorRef, EditorProps>(
         keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
         markdown({
           base: markdownLanguage,
-          codeLanguages: languages,
+          codeLanguages: codeBlockLanguage,
           // Disable setext headings (text\n--- = H2) — they cause jarring
           // style jumps while typing list markers like "-" on a new line.
           // ATX headings (# H1, ## H2) are sufficient.

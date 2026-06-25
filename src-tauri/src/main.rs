@@ -12,7 +12,7 @@ use commands::index::NoteIndex;
 use commands::{
     ai_assistant, analytics, apple_notes, cursor_positions, darwinkit, dictation, embeddings,
     file_watcher, folders, git_share, icloud, index, macos_notify, note_lock, notes,
-    on_this_day, settings, share, stats, sticked_notes, storage,
+    on_this_day, session_drafts, settings, share, stats, sticked_notes, storage,
 };
 use shortcuts::shortcut_to_string;
 use state::AppState;
@@ -466,7 +466,12 @@ fn main() {
             share::build_clipboard_payload,
             share::copy_rich_text_to_clipboard,
             share::copy_note_image_to_clipboard,
+            share::copy_preview_image_to_clipboard,
             share::copy_visible_note_image_to_clipboard,
+            session_drafts::list_session_drafts,
+            session_drafts::get_session_draft,
+            session_drafts::upsert_session_draft,
+            session_drafts::delete_session_draft,
             stats::get_capture_streak,
             sticked_notes::list_sticked_notes,
             sticked_notes::create_sticked_note,
@@ -577,6 +582,7 @@ fn main() {
             //  demand from the global-shortcut handler at line 200-ish.)
 
             windows::restore_sticked_notes(app.handle());
+            windows::restore_session_draft_windows(app.handle());
             tray::setup_tray(app)?;
 
             // Apply tray icon visibility from settings

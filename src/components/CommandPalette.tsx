@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -13,6 +13,11 @@ import {
   createdNoteOpenPayload,
   noteInfosToSearchResults,
 } from "@/utils/commandPaletteNotes";
+import {
+  canMoveNoteToFolder,
+  ensureInboxFolderStats,
+  folderNamesFromStats,
+} from "@/utils/commandPaletteFolders";
 import ConfirmDialog from "./ConfirmDialog";
 import LockPrompt from "./LockPrompt";
 import FolderSidebar from "./command-palette/FolderSidebar";
@@ -62,7 +67,6 @@ export default function CommandPalette() {
   const [folderStats, setFolderStats] = useState<FolderStats[]>([]);
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [folderColors, setFolderColors] = useState<Record<string, string>>({});
-  const [folders, setFolders] = useState<string[]>([]);
   const [selectedFolderIndex, setSelectedFolderIndex] = useState(0);
   const [totalNoteCount, setTotalNoteCount] = useState(0);
 
@@ -90,6 +94,7 @@ export default function CommandPalette() {
     folderName?: string;
   } | null>(null);
   const [showMoveModal, setShowMoveModal] = useState<SearchResult | null>(null);
+  const [draggedNote, setDraggedNote] = useState<SearchResult | null>(null);
   const [lockPromptNote, setLockPromptNote] = useState<SearchResult | null>(
     null,
   );
@@ -103,6 +108,15 @@ export default function CommandPalette() {
 
   const inputRef = useRef<HTMLInputElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
+
+  const visibleFolderStats = useMemo(
+    () => ensureInboxFolderStats(folderStats),
+    [folderStats],
+  );
+  const visibleFolders = useMemo(
+    () => folderNamesFromStats(folderStats),
+    [folderStats],
+  );
 
   // Focus input on mount
   useEffect(() => {
@@ -128,6 +142,12 @@ export default function CommandPalette() {
         ...s,
         note_count: countByFolder.get(s.name) || 0,
       }));
+      for (const [name, note_count] of countByFolder) {
+        if (!name.trim() || name.startsWith(".")) continue;
+        if (!corrected.some((folder) => folder.name === name)) {
+          corrected.push({ name, note_count });
+        }
+      }
 
       setFolderStats(corrected);
       setTotalNoteCount(allNotes.length);
@@ -138,7 +158,6 @@ export default function CommandPalette() {
 
   useEffect(() => {
     loadFolderStats();
-    invoke<string[]>("list_folders").then(setFolders);
     invoke<StikSettings>("get_settings").then((s) => {
       settingsRef.current = s;
       setFolderColors(s.folder_colors ?? {});
@@ -216,10 +235,12 @@ export default function CommandPalette() {
     if (selectedFolder === null) {
       setSelectedFolderIndex(0);
     } else {
-      const idx = folderStats.findIndex((f) => f.name === selectedFolder);
+      const idx = visibleFolderStats.findIndex(
+        (f) => f.name === selectedFolder,
+      );
       setSelectedFolderIndex(idx >= 0 ? idx + 1 : 0); // +1 because "All" is index 0
     }
-  }, [selectedFolder, folderStats]);
+  }, [selectedFolder, visibleFolderStats]);
 
   // Scroll selected note into view
   useEffect(() => {
@@ -279,8 +300,6 @@ export default function CommandPalette() {
 
   const refreshAfterChange = useCallback(async () => {
     await loadFolderStats();
-    const updatedFolders = await invoke<string[]>("list_folders");
-    setFolders(updatedFolders);
 
     const notes = await invoke<NoteInfo[]>("list_notes", {
       folder: selectedFolder,
@@ -357,20 +376,35 @@ export default function CommandPalette() {
   // Move note
   const handleMoveNote = useCallback(
     async (note: SearchResult, targetFolder: string) => {
-      if (targetFolder === note.folder) {
+      if (!canMoveNoteToFolder(note, targetFolder)) {
         setShowMoveModal(null);
+        setDraggedNote(null);
         return;
       }
       try {
         await invoke("move_note", { path: note.path, targetFolder });
         setShowMoveModal(null);
+        setDraggedNote(null);
         await refreshAfterChange();
+        setToast(t("command.toast.noteMoved", { folder: targetFolder }));
       } catch (error) {
         console.error("Failed to move note:", error);
         setToast(translateBackendError(error, t));
       }
     },
     [refreshAfterChange, t],
+  );
+
+  const handleDropNoteOnFolder = useCallback(
+    (targetFolder: string) => {
+      if (!draggedNote || !canMoveNoteToFolder(draggedNote, targetFolder)) {
+        setDraggedNote(null);
+        return;
+      }
+
+      handleMoveNote(draggedNote, targetFolder);
+    },
+    [draggedNote, handleMoveNote],
   );
 
   // Save settings helper — keeps settingsRef in sync and notifies other windows
@@ -477,7 +511,7 @@ export default function CommandPalette() {
     }
 
     // Default to first available folder if "All" is selected
-    const targetFolder = selectedFolder || folders[0];
+    const targetFolder = selectedFolder || visibleFolders[0];
     if (!targetFolder) {
       setToast(t("command.toast.createFolderFirst"));
       return;
@@ -510,7 +544,7 @@ export default function CommandPalette() {
   }, [
     newNoteTitle,
     selectedFolder,
-    folders,
+    visibleFolders,
     refreshAfterChange,
     closePalette,
     t,
@@ -636,7 +670,7 @@ export default function CommandPalette() {
         }
       } else {
         // Left pane (folder sidebar)
-        const totalFolderItems = folderStats.length + 1; // +1 for "All"
+        const totalFolderItems = visibleFolderStats.length + 1; // +1 for "All"
 
         if (e.key === "ArrowDown") {
           e.preventDefault();
@@ -649,7 +683,7 @@ export default function CommandPalette() {
           if (newIdx === 0) {
             setSelectedFolder(null);
           } else {
-            setSelectedFolder(folderStats[newIdx - 1]?.name ?? null);
+            setSelectedFolder(visibleFolderStats[newIdx - 1]?.name ?? null);
           }
         } else if (e.key === "ArrowUp") {
           e.preventDefault();
@@ -658,7 +692,7 @@ export default function CommandPalette() {
           if (newIdx === 0) {
             setSelectedFolder(null);
           } else {
-            setSelectedFolder(folderStats[newIdx - 1]?.name ?? null);
+            setSelectedFolder(visibleFolderStats[newIdx - 1]?.name ?? null);
           }
         } else if (e.key === "Enter") {
           e.preventDefault();
@@ -695,7 +729,7 @@ export default function CommandPalette() {
     selectedFolderIndex,
     selectedFolder,
     query,
-    folderStats,
+    visibleFolderStats,
     confirmDelete,
     showMoveModal,
     lockPromptNote,
@@ -779,7 +813,7 @@ export default function CommandPalette() {
         className={`flex-1 flex overflow-hidden min-h-0 ${sidebarPosition === "right" ? "flex-row-reverse" : ""}`}
       >
         <FolderSidebar
-          folderStats={folderStats}
+          folderStats={visibleFolderStats}
           totalNoteCount={totalNoteCount}
           selectedFolder={selectedFolder}
           folderColors={folderColors}
@@ -816,6 +850,8 @@ export default function CommandPalette() {
             setRenamingFolderName(null);
           }}
           position={sidebarPosition}
+          draggedNoteFolder={draggedNote?.folder ?? null}
+          onDropNoteOnFolder={handleDropNoteOnFolder}
         />
 
         <NoteList
@@ -838,7 +874,9 @@ export default function CommandPalette() {
             setNewNoteTitle("");
           }}
           selectedFolder={selectedFolder}
-          folders={folders}
+          folders={visibleFolders}
+          onDragStartNote={setDraggedNote}
+          onDragEndNote={() => setDraggedNote(null)}
         />
       </div>
 
@@ -931,7 +969,7 @@ export default function CommandPalette() {
       {showMoveModal && (
         <MovePicker
           note={showMoveModal}
-          folders={folders}
+          folders={visibleFolders}
           folderColors={folderColors}
           onMove={(targetFolder) => handleMoveNote(showMoveModal, targetFolder)}
           onCancel={() => setShowMoveModal(null)}

@@ -25,6 +25,8 @@ interface NoteListProps {
   onCancelCreateNote: () => void;
   selectedFolder: string | null;
   folders: string[];
+  onDragStartNote?: (result: SearchResult) => void;
+  onDragEndNote?: () => void;
 }
 
 function highlightSnippet(snippet: string, searchQuery: string) {
@@ -60,6 +62,8 @@ export default function NoteList({
   onCancelCreateNote,
   selectedFolder,
   folders,
+  onDragStartNote,
+  onDragEndNote,
 }: NoteListProps) {
   const { locale, t } = useI18n();
   const hasQuery = query.trim().length > 0;
@@ -148,6 +152,13 @@ export default function NoteList({
         return (
           <button
             key={result.path}
+            draggable={Boolean(onDragStartNote)}
+            onDragStart={(event) => {
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData("text/plain", result.path);
+              onDragStartNote?.(result);
+            }}
+            onDragEnd={onDragEndNote}
             onClick={() => onSelectResult(result)}
             onMouseEnter={() => onSetSelectedIndex(index)}
             className={`w-full px-4 py-3 text-left border-b border-line/50 transition-colors ${
@@ -220,6 +231,13 @@ export default function NoteList({
             return (
               <button
                 key={result.path}
+                draggable={Boolean(onDragStartNote)}
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("text/plain", result.path);
+                  onDragStartNote?.(result);
+                }}
+                onDragEnd={onDragEndNote}
                 onClick={() => onSelectResult(result)}
                 onMouseEnter={() => onSetSelectedIndex(globalIndex)}
                 className={`w-full px-4 py-3 text-left border-b border-line/50 transition-colors ${

@@ -4,6 +4,7 @@
  */
 
 import type { EditorView } from "@codemirror/view";
+import { normalizeCodeBlockLanguage } from "./cm-code-block";
 
 /** Wrap or unwrap the selection with inline markers (**, *, ~~, ==, `) */
 export function toggleInlineFormat(view: EditorView, marker: string): void {
@@ -149,6 +150,47 @@ export function toggleLinePrefix(view: EditorView, prefix: string): void {
       selection: { anchor: Math.max(0, from + selDelta) },
     });
   }
+}
+
+function stripOuterBlankLines(text: string) {
+  return text.replace(/^\n/, "").replace(/\n$/, "");
+}
+
+/** Toggle a fenced code block around the selection or insert an empty block. */
+export function toggleCodeBlock(
+  view: EditorView,
+  language = "plaintext",
+): void {
+  const { state } = view;
+  const { from, to } = state.selection.main;
+  const lang = normalizeCodeBlockLanguage(language);
+
+  if (from === to) {
+    const block = `\`\`\`${lang}\n\n\`\`\``;
+    view.dispatch({
+      changes: { from, to, insert: block },
+      selection: { anchor: from + `\`\`\`${lang}\n`.length },
+    });
+    return;
+  }
+
+  const selected = state.sliceDoc(from, to);
+  const fenceMatch = selected.match(/^```[^\n]*\n([\s\S]*?)\n```$/);
+
+  if (fenceMatch) {
+    const inner = stripOuterBlankLines(fenceMatch[1]);
+    view.dispatch({
+      changes: { from, to, insert: inner },
+      selection: { anchor: from, head: from + inner.length },
+    });
+    return;
+  }
+
+  const wrapped = `\`\`\`${lang}\n${stripOuterBlankLines(selected)}\n\`\`\``;
+  view.dispatch({
+    changes: { from, to, insert: wrapped },
+    selection: { anchor: from, head: from + wrapped.length },
+  });
 }
 
 /** Insert a link template [text](url) around selection or at cursor */

@@ -20,6 +20,12 @@ import {
 } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import type { DecorationSet } from "@codemirror/view";
+import {
+  buildCodeFenceOpening,
+  CODE_BLOCK_LANGUAGE_OPTIONS,
+  extractCodeBlockContent,
+  getCodeFenceLanguage,
+} from "./cm-code-block";
 import { bindImagePreviewElement } from "@/utils/imagePreviewEvent";
 
 // ── Horizontal Rule ─────────────────────────────────────────────────
@@ -119,6 +125,138 @@ function getEditorView(el: HTMLElement): EditorView | null {
   const editor = el.closest(".cm-editor") as HTMLElement | null;
   if (!editor) return null;
   return EditorView.findFromDOM(editor) ?? null;
+}
+
+async function writeClipboardText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
+}
+
+function codeBlockCopyLabels() {
+  const language =
+    document.documentElement.lang || navigator.language || navigator.languages?.[0] || "";
+  const isChinese = language.toLowerCase().startsWith("zh");
+  return isChinese
+    ? { copy: "复制", copied: "已复制", failed: "失败" }
+    : { copy: "Copy", copied: "Copied", failed: "Failed" };
+}
+
+// ── Code block controls ────────────────────────────────────────────
+
+class CodeBlockHeaderWidget extends WidgetType {
+  constructor(
+    readonly source: string,
+    readonly openingLineFrom: number,
+    readonly openingLineTo: number,
+    readonly openingLineText: string,
+  ) {
+    super();
+  }
+
+  eq(other: CodeBlockHeaderWidget) {
+    return (
+      this.source === other.source &&
+      this.openingLineFrom === other.openingLineFrom &&
+      this.openingLineTo === other.openingLineTo &&
+      this.openingLineText === other.openingLineText
+    );
+  }
+
+  toDOM() {
+    const wrapper = document.createElement("div");
+    wrapper.className = "cm-codeblock-header";
+    wrapper.setAttribute("contenteditable", "false");
+
+    const select = document.createElement("select");
+    select.className = "cm-codeblock-language";
+    select.title = "Code block language";
+    const currentLanguage = getCodeFenceLanguage(this.openingLineText);
+
+    for (const option of CODE_BLOCK_LANGUAGE_OPTIONS) {
+      const opt = document.createElement("option");
+      opt.value = option.value;
+      opt.textContent = option.label;
+      select.appendChild(opt);
+    }
+    if (
+      !CODE_BLOCK_LANGUAGE_OPTIONS.some(
+        (option) => option.value === currentLanguage,
+      )
+    ) {
+      const custom = document.createElement("option");
+      custom.value = currentLanguage;
+      custom.textContent = currentLanguage;
+      select.appendChild(custom);
+    }
+    select.value = currentLanguage;
+
+    select.addEventListener("mousedown", (event) => {
+      event.stopPropagation();
+    });
+    select.addEventListener("change", () => {
+      const view = getEditorView(wrapper);
+      if (!view) return;
+      const nextOpening = buildCodeFenceOpening(
+        this.openingLineText,
+        select.value,
+      );
+      view.dispatch({
+        changes: {
+          from: this.openingLineFrom,
+          to: this.openingLineTo,
+          insert: nextOpening,
+        },
+      });
+      view.focus();
+    });
+
+    const copyButton = document.createElement("button");
+    const labels = codeBlockCopyLabels();
+    copyButton.type = "button";
+    copyButton.className = "cm-codeblock-copy";
+    copyButton.textContent = labels.copy;
+    copyButton.title = "Copy code";
+    copyButton.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    copyButton.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        await writeClipboardText(extractCodeBlockContent(this.source));
+        copyButton.textContent = labels.copied;
+        window.setTimeout(() => {
+          copyButton.textContent = labels.copy;
+        }, 1200);
+      } catch {
+        copyButton.textContent = labels.failed;
+        window.setTimeout(() => {
+          copyButton.textContent = labels.copy;
+        }, 1200);
+      }
+    });
+
+    wrapper.appendChild(select);
+    wrapper.appendChild(copyButton);
+    return wrapper;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
 }
 
 // ── Table context menu ──────────────────────────────────────────────
@@ -535,7 +673,8 @@ function buildBlockDecorations(state: EditorState): Range<Decoration>[] {
       if (
         node.name !== "HorizontalRule" &&
         node.name !== "Table" &&
-        node.name !== "Image"
+        node.name !== "Image" &&
+        node.name !== "FencedCode"
       )
         return;
 
@@ -582,6 +721,27 @@ function buildBlockDecorations(state: EditorState): Range<Decoration>[] {
             node.from,
             node.to,
           ),
+        );
+        return false;
+      }
+
+      if (node.name === "FencedCode") {
+        const marks = node.node.getChildren("CodeMark");
+        if (marks.length === 0) return false;
+
+        const openingLine = state.doc.lineAt(marks[0].from);
+        const source = state.doc.sliceString(node.from, node.to);
+        decorations.push(
+          Decoration.widget({
+            widget: new CodeBlockHeaderWidget(
+              source,
+              openingLine.from,
+              openingLine.to,
+              openingLine.text,
+            ),
+            block: true,
+            side: -1,
+          }).range(openingLine.from),
         );
         return false;
       }

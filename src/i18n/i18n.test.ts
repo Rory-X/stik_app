@@ -36,6 +36,8 @@ describe("i18n dictionaries", () => {
     expect(t("ai.toast.summaryApplied")).toBe("摘要已应用");
     expect(t("dictation.setup.title")).toBe("设置语音输入");
     expect(t("dictation.settings.models")).toBe("模型");
+    expect(t("dictation.settings.chineseScript")).toBe("中文输出");
+    expect(t("dictation.settings.chineseScript.simplified")).toBe("简体中文");
   });
 
   it("translates main settings sections", () => {

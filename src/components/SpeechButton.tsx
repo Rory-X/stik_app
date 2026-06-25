@@ -15,10 +15,11 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { DictationStatus } from "@/types";
+import type { ChineseScriptPreference, DictationStatus } from "@/types";
 import DictationSetupModal from "./DictationSetupModal";
 import { useI18n } from "@/i18n/react";
 import { translateBackendError } from "@/i18n/errors";
+import { normalizeChineseScript } from "@/utils/chineseScript";
 import "@/styles/speech-button.css";
 
 interface SpeechButtonProps {
@@ -27,6 +28,8 @@ interface SpeechButtonProps {
   getInsertOrigin: () => number;
   /** ISO language code (e.g. "en", "it"). null = auto-detect. */
   language?: string | null;
+  /** How Chinese dictation text should be normalized before insertion. */
+  chineseScript?: ChineseScriptPreference | null;
   /** Persisted Whisper variant id the user picked in Settings. */
   activeModel?: string | null;
   /**
@@ -54,6 +57,7 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
       onTranscription,
       getInsertOrigin,
       language,
+      chineseScript,
       activeModel,
       onActiveModelSelected,
       className,
@@ -95,6 +99,10 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
     onPartialRef.current = onPartialText;
     const onTranscriptionRef = useRef(onTranscription);
     onTranscriptionRef.current = onTranscription;
+    const chineseScriptRef = useRef<ChineseScriptPreference | null | undefined>(
+      chineseScript,
+    );
+    chineseScriptRef.current = chineseScript;
 
     const insertOriginRef = useRef(0);
     // Prevents partials that arrive after the user clicked stop from
@@ -142,7 +150,10 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
           ) {
             return;
           }
-          onPartialRef.current(event.payload.text, insertOriginRef.current);
+          onPartialRef.current(
+            normalizeChineseScript(event.payload.text, chineseScriptRef.current),
+            insertOriginRef.current,
+          );
         },
       );
 
@@ -219,7 +230,10 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
         if (!mountedRef.current) return;
         setState("idle");
         if (result?.text) {
-          onTranscriptionRef.current(result.text, insertOriginRef.current);
+          onTranscriptionRef.current(
+            normalizeChineseScript(result.text, chineseScriptRef.current),
+            insertOriginRef.current,
+          );
         }
       } catch (e) {
         if (mountedRef.current) {
