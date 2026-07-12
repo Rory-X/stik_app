@@ -56,6 +56,7 @@ import { taskCheckboxPlugin, taskCheckboxHandler } from "@/extensions/cm-task-to
 import { hideMarkersPlugin, autoCloseMarkup } from "@/extensions/cm-hide-markers";
 import { headingFoldPlugin } from "@/extensions/cm-heading-fold";
 import { codeBlockLanguage } from "@/extensions/cm-code-languages";
+import { buildCodeBlockPasteSpec } from "@/extensions/cm-code-block";
 import { filenameToSlug } from "@/utils/wikiLink";
 import { normalizeUrl } from "@/utils/normalizeUrl";
 import { isImageUrl } from "@/utils/isImageUrl";
@@ -286,10 +287,18 @@ const Editor = forwardRef<EditorRef, EditorProps>(
             }
           }
 
-          const pastedText = event.clipboardData?.getData("text/plain")?.trim() ?? "";
-          if (isImageUrl(pastedText)) {
+          const pastedText = event.clipboardData?.getData("text/plain") ?? "";
+          const codeBlockPaste = buildCodeBlockPasteSpec(view.state, pastedText);
+          if (pastedText && codeBlockPaste) {
             event.preventDefault();
-            const insert = `![](${pastedText})`;
+            view.dispatch(codeBlockPaste);
+            return true;
+          }
+
+          const trimmedPastedText = pastedText.trim();
+          if (isImageUrl(trimmedPastedText)) {
+            event.preventDefault();
+            const insert = `![](${trimmedPastedText})`;
             view.dispatch({
               changes: { from: view.state.selection.main.from, to: view.state.selection.main.to, insert },
               selection: { anchor: view.state.selection.main.from + insert.length },
