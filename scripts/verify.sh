@@ -21,6 +21,7 @@ node --input-type=module -e '
 printf 'Verification data: %s\n' "$STIK_DEV_ROOT"
 
 bun run check:platform
+bun run check:dependency-patches
 bun run check:bundle
 bun run test
 cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check

@@ -530,7 +530,9 @@ mod tests {
         {
             let note_path = test_dir.join(format!("{name}.md"));
             fs::write(&note_path, content).unwrap();
-            fs::File::open(&note_path)
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&note_path)
                 .unwrap()
                 .set_times(fs::FileTimes::new().set_modified(
                     UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 + number as u64),

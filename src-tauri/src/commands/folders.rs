@@ -438,28 +438,25 @@ mod tests {
         let root = Path::new("/vault");
         let entries = HashMap::from([
             (
-                "/vault".to_string(),
+                root.to_path_buf(),
                 vec![directory("Projects"), directory(".trash")],
             ),
             (
-                "/vault/Projects".to_string(),
+                root.join("Projects"),
                 vec![note("one.md"), directory("Work"), directory(".assets")],
             ),
             (
-                "/vault/Projects/Work".to_string(),
+                root.join("Projects/Work"),
                 vec![note("two.markdown"), directory("Deep")],
             ),
             (
-                "/vault/Projects/Work/Deep".to_string(),
+                root.join("Projects/Work/Deep"),
                 vec![note("three.MD"), note("ignore.txt")],
             ),
         ]);
 
         let stats = folder_stats_with(root, &|path| {
-            Ok(entries
-                .get(&path.to_string_lossy().to_string())
-                .cloned()
-                .unwrap_or_default())
+            Ok(entries.get(path).cloned().unwrap_or_default())
         })
         .unwrap();
 

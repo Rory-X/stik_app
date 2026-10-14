@@ -55,6 +55,8 @@ mod tests {
         for path in ["", ".", "relative", "/", "/tmp/../Users"] {
             assert!(validate_dev_root(Path::new(path)).is_err(), "{path}");
         }
-        assert!(validate_dev_root(Path::new("/tmp/stik-qa/session")).is_ok());
+        let valid = std::env::temp_dir().join("stik-qa/session");
+        assert!(validate_dev_root(&valid).is_ok());
+        assert!(validate_dev_root(&valid.join("../other")).is_err());
     }
 }

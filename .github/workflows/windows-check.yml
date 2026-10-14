@@ -43,6 +43,9 @@ jobs:
       - name: Test (frontend)
         run: bun run test
 
+      - name: Verify dependency patches
+        run: bun run check:dependency-patches
+
       - name: Build (frontend)
         run: bun run build
 

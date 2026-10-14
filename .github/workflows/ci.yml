@@ -34,7 +34,7 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - name: Audit dependencies
-        run: bun audit --audit-level=high
+        run: bun run audit
 
       - name: Check platform declarations
         run: bun run check:platform

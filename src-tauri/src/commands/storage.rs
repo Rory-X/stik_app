@@ -277,9 +277,32 @@ pub(crate) fn move_local_path(src: &Path, dst: &Path) -> Result<(), String> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub(crate) fn move_local_path(src: &Path, dst: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+
+    // MoveFileW fails if the destination already exists, including when it
+    // arrives after the caller's existence check. std::fs::rename replaces it.
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileW(existing: *const u16, destination: *const u16) -> i32;
+    }
+    let mut source: Vec<u16> = src.as_os_str().encode_wide().collect();
+    let mut destination: Vec<u16> = dst.as_os_str().encode_wide().collect();
+    if source.contains(&0) || destination.contains(&0) {
+        return Err("Move paths cannot contain NUL characters".into());
+    }
+    source.push(0);
+    destination.push(0);
+    if unsafe { MoveFileW(source.as_ptr(), destination.as_ptr()) } == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn move_local_path(_src: &Path, _dst: &Path) -> Result<(), String> {
-    Err("Exclusive note moves require macOS".into())
+    Err("Exclusive note moves require macOS or Windows".into())
 }
 
 pub fn move_file(src: &str, dst: &str) -> Result<(), String> {

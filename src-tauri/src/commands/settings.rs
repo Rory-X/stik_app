@@ -643,7 +643,6 @@ mod tests {
         normalize_system_shortcuts, parse_color_value, ShortcutMapping, StikSettings,
     };
     use std::collections::HashMap;
-    use std::path::PathBuf;
 
     #[test]
     fn legacy_locale_migrates_once_without_overriding_language() {
@@ -747,21 +746,19 @@ mod tests {
 
     #[test]
     fn custom_asset_scope_matches_the_selected_vault_layout() {
+        let directory = std::env::temp_dir().join("My Notes");
         let mut settings = StikSettings {
-            notes_directory: "/tmp/My Notes".to_string(),
+            notes_directory: directory.to_string_lossy().into_owned(),
             ..StikSettings::default()
         };
 
         assert_eq!(
             custom_notes_asset_root(&settings),
-            Some(PathBuf::from("/tmp/My Notes/Stik"))
+            Some(directory.join("Stik"))
         );
 
         settings.use_directory_as_root = true;
-        assert_eq!(
-            custom_notes_asset_root(&settings),
-            Some(PathBuf::from("/tmp/My Notes"))
-        );
+        assert_eq!(custom_notes_asset_root(&settings), Some(directory));
     }
 
     #[test]

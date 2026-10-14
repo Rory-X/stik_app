@@ -9,6 +9,8 @@
     "build": "tsc && vite build",
     "check:bundle": "node scripts/check-bundle-size.mjs",
     "check:platform": "node scripts/check-platform-consistency.mjs",
+    "check:dependency-patches": "node scripts/check-dependency-patches.mjs",
+    "audit": "bun run check:dependency-patches && bun audit --audit-level=high --ignore=GHSA-vfj7-8cjw-p6xm",
     "preview": "vite preview",
     "tauri": "tauri",
     "release": "./scripts/release.sh",
@@ -54,5 +56,8 @@
     "typescript": "^5.7.0",
     "vite": "^6.4.3",
     "vitest": "^4.1.10"
+  },
+  "patchedDependencies": {
+    "braces@3.0.3": "patches/braces@3.0.3.patch"
   }
 }
