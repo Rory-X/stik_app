@@ -14,6 +14,8 @@ pub mod macos_notify;
 pub mod note_lock;
 pub mod notes;
 pub mod on_this_day;
+pub mod pinned_notes;
+pub mod platform;
 pub mod session_drafts;
 pub mod settings;
 pub mod share;

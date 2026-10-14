@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useI18n } from "@/i18n/react";
+import { usePlatformCapabilities } from "@/hooks/usePlatformCapabilities";
 
 interface SyncIndicatorProps {
   enabled: boolean;
@@ -8,10 +9,12 @@ interface SyncIndicatorProps {
 
 export default function SyncIndicator({ enabled }: SyncIndicatorProps) {
   const { t } = useI18n();
+  const capabilities = usePlatformCapabilities();
   const [syncing, setSyncing] = useState(false);
+  const isActive = enabled && capabilities.icloud;
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!isActive) return;
 
     const unlisten = listen("icloud-files-changed", () => {
       setSyncing(true);
@@ -22,9 +25,10 @@ export default function SyncIndicator({ enabled }: SyncIndicatorProps) {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [enabled]);
+  }, [isActive]);
 
-  if (!enabled) return null;
+  // iCloud is macOS-only; other platforms have no iCloud sync state to show.
+  if (!isActive) return null;
 
   return (
     <div

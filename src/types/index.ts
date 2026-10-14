@@ -176,6 +176,8 @@ export interface NoteInfo {
   content: string;
   created: string;
   locked?: boolean;
+  pinned?: boolean;
+  pinned_at?: string | null;
 }
 
 export interface SearchResult {
@@ -186,6 +188,8 @@ export interface SearchResult {
   snippet: string;
   created: string;
   locked?: boolean;
+  pinned?: boolean;
+  pinned_at?: string | null;
 }
 
 export interface SemanticResult {
@@ -241,4 +245,18 @@ export interface GitSyncStatus {
   syncing: boolean;
   last_sync_at: string | null;
   last_error: string | null;
+}
+
+/** Platform feature flags reported by the `get_platform_capabilities` command. */
+export interface PlatformCapabilities {
+  os: string;
+  clip_capture: boolean;
+  ai_assistant: boolean;
+  icloud: boolean;
+  apple_notes: boolean;
+  note_lock: boolean;
+  image_copy: boolean;
+  dictation: boolean;
+  semantic_search: boolean;
+  hide_dock_icon: boolean;
 }

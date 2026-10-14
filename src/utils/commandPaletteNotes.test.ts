@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createdNoteOpenPayload,
   noteInfosToSearchResults,
+  sortPinnedFirst,
   titleFromStikFilename,
 } from "./commandPaletteNotes";
 import type { NoteInfo } from "@/types";
@@ -27,6 +28,50 @@ describe("commandPaletteNotes", () => {
     expect(titleFromStikFilename("20260623-120000-secret-note-abcd.md")).toBe(
       "secret note",
     );
+  });
+
+  it("keeps pin metadata when preparing notes", () => {
+    const notes: NoteInfo[] = [
+      {
+        path: "/tmp/Stik/Inbox/pinned.md",
+        filename: "20260623-120000-pinned-abcd.md",
+        folder: "Inbox",
+        content: "# Pinned",
+        created: "20260623-120000",
+        pinned: true,
+        pinned_at: "2026-06-23T12:10:00Z",
+      },
+    ];
+
+    expect(noteInfosToSearchResults(notes)[0]).toMatchObject({
+      pinned: true,
+      pinned_at: "2026-06-23T12:10:00Z",
+    });
+  });
+
+  it("sorts pinned notes before regular notes", () => {
+    const sorted = sortPinnedFirst([
+      {
+        path: "/tmp/Stik/Inbox/newer.md",
+        filename: "newer.md",
+        folder: "Inbox",
+        title: "Newer",
+        snippet: "",
+        created: "20260623-130000",
+      },
+      {
+        path: "/tmp/Stik/Inbox/pinned.md",
+        filename: "pinned.md",
+        folder: "Inbox",
+        title: "Pinned",
+        snippet: "",
+        created: "20260623-120000",
+        pinned: true,
+        pinned_at: "2026-06-23T12:10:00Z",
+      },
+    ]);
+
+    expect(sorted.map((note) => note.title)).toEqual(["Pinned", "Newer"]);
   });
 
   it("opens the note path returned by save_note instead of relying on list ordering", () => {

@@ -3,7 +3,11 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { codeBlockLanguage } from "./cm-code-languages";
-import { stikHighlightStyle } from "./cm-theme";
+import {
+  CODE_BLOCK_HIGHLIGHT_COLORS,
+  stikEditorTheme,
+  stikHighlightStyle,
+} from "./cm-theme";
 
 let view: EditorView | null = null;
 
@@ -22,6 +26,7 @@ function createView(doc: string) {
       doc,
       extensions: [
         markdown({ base: markdownLanguage, codeLanguages: codeBlockLanguage }),
+        stikEditorTheme,
         stikHighlightStyle,
       ],
     }),
@@ -64,5 +69,33 @@ describe("code block syntax highlighting", () => {
       "shell",
       "yaml",
     ]);
+  });
+
+  it("uses a high-contrast code palette in the generated stylesheet", () => {
+    createView("```typescript\nconst answer = 42;\n```");
+
+    const generatedCss = Array.from(document.querySelectorAll("style"))
+      .map((style) => style.textContent ?? "")
+      .join("\n");
+
+    expect(generatedCss).toContain(CODE_BLOCK_HIGHLIGHT_COLORS.keyword);
+    expect(generatedCss).toContain(CODE_BLOCK_HIGHLIGHT_COLORS.string);
+    expect(generatedCss).toContain(CODE_BLOCK_HIGHLIGHT_COLORS.function);
+    expect(generatedCss).toContain(CODE_BLOCK_HIGHLIGHT_COLORS.number);
+  });
+
+  it("keeps drawn selections visible above code block line backgrounds", () => {
+    createView("```typescript\nconst answer = 42;\n```");
+
+    const generatedCss = Array.from(document.querySelectorAll("style"))
+      .map((style) => style.textContent ?? "")
+      .join("\n");
+
+    expect(generatedCss).toMatch(
+      /\.cm-selectionLayer\s*\{[^}]*z-index:\s*20\s*!important/,
+    );
+    expect(generatedCss).toMatch(
+      /\.cm-selectionLayer\s*\{[^}]*pointer-events:\s*none/,
+    );
   });
 });

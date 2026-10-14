@@ -37,7 +37,21 @@ export function noteInfosToSearchResults(notes: NoteInfo[]): SearchResult[] {
     snippet: normalizeNoteSnippet(note.content),
     created: note.created,
     locked: note.locked,
+    pinned: note.pinned,
+    pinned_at: note.pinned_at,
   }));
+}
+
+export function sortPinnedFirst<T extends Pick<SearchResult, "created" | "pinned" | "pinned_at">>(
+  notes: T[],
+): T[] {
+  return [...notes].sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    if (a.pinned && b.pinned) {
+      return (b.pinned_at || "").localeCompare(a.pinned_at || "");
+    }
+    return b.created.localeCompare(a.created);
+  });
 }
 
 export function createdNoteOpenPayload(

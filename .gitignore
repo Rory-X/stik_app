@@ -19,6 +19,9 @@ Thumbs.db
 *.log
 npm-debug.log*
 
+# Local recovery snapshots
+backups/
+
 # Env
 .env*
 

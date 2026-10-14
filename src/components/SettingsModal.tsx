@@ -19,6 +19,7 @@ import {
 } from "@/utils/settingsLayout";
 import { useI18n } from "@/i18n/react";
 import type { MessageKey } from "@/i18n";
+import { usePlatformCapabilities } from "@/hooks/usePlatformCapabilities";
 
 const TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
   {
@@ -232,6 +233,16 @@ export default function SettingsModal({
   isWindow = false,
 }: SettingsModalProps) {
   const { t } = useI18n();
+  const capabilities = usePlatformCapabilities();
+  // Tabs whose feature is unavailable on this platform are hidden, not greyed.
+  // The AI tab holds the master switch for semantic search and folder
+  // suggestions as well as the assistant.
+  const visibleTabs = TABS.filter(
+    (tab) =>
+      tab.id !== "ai" ||
+      capabilities.ai_assistant ||
+      capabilities.semantic_search,
+  );
   const [activeTab, setActiveTab] = useState<SettingsTab>("appearance");
   const [settings, setSettings] = useState<StikSettings | null>(null);
   const [folders, setFolders] = useState<string[]>([]);
@@ -458,7 +469,7 @@ export default function SettingsModal({
   const tabBar = (
     <div className="px-4 pb-3">
       <div className="flex flex-wrap items-center gap-0.5">
-        {TABS.map((tab) => {
+        {visibleTabs.map((tab) => {
           const isActive = activeTab === tab.id;
           return (
             <button

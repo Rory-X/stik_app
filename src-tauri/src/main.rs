@@ -11,17 +11,28 @@ use commands::embeddings::EmbeddingIndex;
 use commands::index::NoteIndex;
 use commands::{
     ai_assistant, analytics, apple_notes, cursor_positions, darwinkit, dictation, embeddings,
-    file_watcher, folders, git_share, icloud, index, macos_notify, note_lock, notes,
-    on_this_day, session_drafts, settings, share, stats, sticked_notes, storage,
+    file_watcher, folders, git_share, icloud, index, note_lock, notes,
+    on_this_day, pinned_notes, platform, session_drafts, settings, share, stats, sticked_notes,
+    storage,
 };
+// `macos_notify` is only used by the macOS-only clipboard capture below.
+#[cfg(target_os = "macos")]
+use commands::macos_notify;
 use shortcuts::shortcut_to_string;
 use state::AppState;
-use tauri::{AppHandle, Emitter, Manager, RunEvent};
+use tauri::{AppHandle, Emitter, Manager};
+// `RunEvent::Opened` (file-open events) only exists on macOS/iOS in Tauri 2.
+#[cfg(target_os = "macos")]
+use tauri::RunEvent;
 #[cfg(debug_assertions)]
 use tauri_plugin_global_shortcut::{Code, Modifiers};
 use tauri_plugin_global_shortcut::ShortcutState;
 use windows::{show_command_palette, show_postit_with_folder, show_settings};
 
+// Used on macOS by the `RunEvent::Opened` handler, and on every platform by
+// the tests below. Stage 1 will reuse it on Windows via CLI arguments, so it
+// must keep compiling everywhere; the attribute only silences the warning.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn folder_for_opened_note(path: &std::path::Path, stik_root: &std::path::Path) -> String {
     if let Ok(relative) = path.strip_prefix(stik_root) {
         let mut components = relative.components();
@@ -32,6 +43,8 @@ fn folder_for_opened_note(path: &std::path::Path, stik_root: &std::path::Path) -
     String::new()
 }
 
+// Kept on all platforms: stage 1 will drive it from Windows CLI arguments.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn handle_opened_files(app: &AppHandle, paths: Vec<std::path::PathBuf>) {
     for path in paths {
         let is_markdown = path
@@ -75,12 +88,15 @@ fn handle_opened_files(app: &AppHandle, paths: Vec<std::path::PathBuf>) {
     }
 }
 
+// ── macOS-only: clipboard capture (cut from the Windows build) ──
+
 /// Tracks whether we've already opened System Settings and notified
 /// the user about missing Accessibility this session. Reset back to
 /// false as soon as a clip_capture succeeds — so if the user grants
 /// permission and it starts working, the flag clears and we're ready
 /// to warn again if it breaks later. Without this, every failed clip
 /// press would pop System Settings open, which is awful.
+#[cfg(target_os = "macos")]
 static CLIP_PERMISSION_WARNED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -96,6 +112,7 @@ static CLIP_PERMISSION_WARNED: std::sync::atomic::AtomicBool =
 /// sidesteps ALL of that: no keystroke simulation, no pasteboard dance,
 /// the text comes straight from the source app's accessibility tree.
 /// This is the same approach PopClip, Alfred, and Raycast use.
+#[cfg(target_os = "macos")]
 fn clip_capture(app: &AppHandle) {
     // Write to a dedicated file so the trace survives across process
     // boundaries and is trivially grep-able. eprintln also goes to the
@@ -212,6 +229,7 @@ fn clip_capture(app: &AppHandle) {
 /// Settings — we trust the user to remember the fix from the first
 /// prompt, and it's infuriating to have Settings pop open on every
 /// shortcut press while debugging.
+#[cfg(target_os = "macos")]
 fn warn_about_accessibility() {
     use std::sync::atomic::Ordering;
     let already_warned = CLIP_PERMISSION_WARNED.swap(true, Ordering::Relaxed);
@@ -333,11 +351,18 @@ fn read_selected_text_via_ax() -> Option<String> {
 /// through the Settings tree. The `x-apple.systempreferences:` URL
 /// scheme is accepted on every modern macOS, and the anchor sends the
 /// user straight to the Accessibility pane.
+#[cfg(target_os = "macos")]
 fn open_accessibility_settings() {
     let _ = std::process::Command::new("open")
         .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
         .spawn();
 }
+
+/// Windows/Linux have no Accessibility API to read the selection from,
+/// and clipboard capture is cut from those builds. Keep the symbol so the
+/// shortcut dispatcher below compiles unchanged on every platform.
+#[cfg(not(target_os = "macos"))]
+fn clip_capture(_app: &AppHandle) {}
 
 fn main() {
     tauri::Builder::default()
@@ -394,19 +419,13 @@ fn main() {
                                     return;
                                 }
                                 "voice_note" => {
-                                    // Open a fresh postit for the default
-                                    // folder, then tell the webview to
-                                    // auto-toggle the mic as soon as it
-                                    // sees the event. The postit window
-                                    // is pre-created (just hidden) so the
-                                    // listener is already mounted.
+                                    // Open a fresh capture window for the
+                                    // default folder and let the webview
+                                    // auto-toggle the mic from its URL params.
                                     let default_folder = settings::load_settings_from_file()
                                         .map(|s| s.default_folder)
                                         .unwrap_or_else(|_| "Inbox".to_string());
-                                    show_postit_with_folder(app, &default_folder);
-                                    if let Some(window) = app.get_webview_window("postit") {
-                                        let _ = window.emit("start-dictation", ());
-                                    }
+                                    windows::show_voice_note_with_folder(app, &default_folder);
                                     return;
                                 }
                                 _ => {}
@@ -449,6 +468,7 @@ fn main() {
             notes::get_note_content,
             notes::save_note_image,
             notes::save_note_image_from_path,
+            pinned_notes::toggle_note_pinned,
             folders::list_folders,
             folders::create_folder,
             folders::delete_folder,
@@ -497,6 +517,7 @@ fn main() {
             shortcuts::pause_shortcuts,
             shortcuts::resume_shortcuts,
             settings::set_dock_icon_visibility,
+            platform::get_platform_capabilities,
             settings::set_tray_icon_visibility,
             settings::save_viewing_window_size,
             settings::save_viewing_window_geometry,
@@ -670,20 +691,11 @@ fn main() {
                 }
             }
 
-            // Postit window: emit blur event so frontend can decide whether to hide
+            // Default hidden postit window: emit blur event so frontend can
+            // decide whether to hide. Fresh capture windows attach the same
+            // handler when they are created.
             if let Some(window) = app.get_webview_window("postit") {
-                let w = window.clone();
-                window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::Focused(focused) = event {
-                        if !focused {
-                            // Don't hide when Apple Notes picker took focus
-                            if w.app_handle().get_webview_window("apple-notes-picker").is_some() {
-                                return;
-                            }
-                            let _ = w.emit("postit-blur", ());
-                        }
-                    }
-                });
+                windows::attach_capture_window_blur_event(&window);
             } else {
                 eprintln!("Warning: postit window not found during setup");
             }
@@ -696,6 +708,9 @@ fn main() {
             std::process::exit(1);
         })
         .run(|app, event| {
+            // `RunEvent::Opened` is macOS/iOS-only in Tauri 2. Stage 1 will
+            // wire Windows file-open handling through CLI arguments instead.
+            #[cfg(target_os = "macos")]
             if let RunEvent::Opened { urls } = event {
                 let paths = urls
                     .into_iter()
@@ -704,6 +719,9 @@ fn main() {
                     .collect();
                 handle_opened_files(app, paths);
             }
+
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
         });
 }
 

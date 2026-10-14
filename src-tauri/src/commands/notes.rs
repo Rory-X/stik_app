@@ -27,6 +27,10 @@ pub struct NoteInfo {
     pub created: String,
     #[serde(default)]
     pub locked: bool,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub pinned_at: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -39,6 +43,10 @@ pub struct SearchResult {
     pub created: String,
     #[serde(default)]
     pub locked: bool,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub pinned_at: Option<String>,
 }
 
 /// Generate a slug from content (first 5 words, max 40 chars)
@@ -182,10 +190,13 @@ pub fn list_notes(
     index: State<'_, NoteIndex>,
 ) -> Result<Vec<NoteInfo>, String> {
     let entries = index.list(folder.as_deref())?;
+    let pinned_lookup = super::pinned_notes::load_pinned_lookup().unwrap_or_default();
 
     Ok(entries
         .into_iter()
         .map(|e| NoteInfo {
+            pinned_at: pinned_lookup.get(&e.path).cloned(),
+            pinned: pinned_lookup.contains_key(&e.path),
             locked: e.locked,
             path: e.path,
             filename: e.filename,
@@ -207,10 +218,13 @@ pub fn search_notes(
     }
 
     let results = index.search(&query, folder.as_deref())?;
+    let pinned_lookup = super::pinned_notes::load_pinned_lookup().unwrap_or_default();
 
     Ok(results
         .into_iter()
         .map(|(entry, snippet)| SearchResult {
+            pinned_at: pinned_lookup.get(&entry.path).cloned(),
+            pinned: pinned_lookup.contains_key(&entry.path),
             locked: entry.locked,
             path: entry.path,
             filename: entry.filename,
@@ -293,6 +307,7 @@ pub fn update_note(
         super::storage::delete_file(&path).map_err(|e| format!("Failed to delete note: {}", e))?;
         index.remove(&path);
         emb_index.remove_entry(&path);
+        let _ = super::pinned_notes::remove_pinned_note(&path);
         let _ = emb_index.save();
         return Ok(NoteSaved {
             path: String::new(),
@@ -381,6 +396,7 @@ pub fn delete_note(
     analytics::track("note_deleted", serde_json::json!({}));
     index.remove(&path);
     emb_index.remove_entry(&path);
+    let _ = super::pinned_notes::remove_pinned_note(&path);
     let _ = emb_index.save();
     git_share::notify_note_changed(&folder);
 
@@ -445,6 +461,7 @@ pub fn move_note(
     let new_path_str = target_path.to_string_lossy().to_string();
     index.move_entry(&path, &new_path_str, &target_folder);
     emb_index.move_entry(&path, &new_path_str);
+    let _ = super::pinned_notes::move_pinned_note(&path, &new_path_str);
     let _ = emb_index.save();
     git_share::notify_note_changed(&source_folder);
     git_share::notify_note_changed(&target_folder);
@@ -453,6 +470,8 @@ pub fn move_note(
     let created = filename.split('-').take(2).collect::<Vec<_>>().join("-");
 
     let locked = super::note_lock::is_locked_content(&content);
+    let pinned = super::pinned_notes::is_note_pinned(&new_path_str);
+    let pinned_at = super::pinned_notes::pin_order(&new_path_str);
     Ok(NoteInfo {
         path: new_path_str,
         filename,
@@ -460,6 +479,8 @@ pub fn move_note(
         content,
         created,
         locked,
+        pinned,
+        pinned_at,
     })
 }
 

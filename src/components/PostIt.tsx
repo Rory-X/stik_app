@@ -49,6 +49,7 @@ import {
 } from "@/utils/sessionDrafts";
 import SyncIndicator from "./SyncIndicator";
 import { useI18n } from "@/i18n/react";
+import { usePlatformCapabilities } from "@/hooks/usePlatformCapabilities";
 
 interface PostItProps {
   folder: string;
@@ -71,6 +72,7 @@ interface PostItProps {
   sessionDraftBaseModifiedAt?: string;
   sessionDraftCursor?: SessionDraftCursor | null;
   isRecoveredSessionDraft?: boolean;
+  autoStartDictation?: boolean;
 }
 
 function fallbackHtmlFromPlainText(text: string): string {
@@ -130,8 +132,10 @@ export default function PostIt({
   sessionDraftBaseModifiedAt,
   sessionDraftCursor,
   isRecoveredSessionDraft = false,
+  autoStartDictation = false,
 }: PostItProps) {
   const { t } = useI18n();
+  const capabilities = usePlatformCapabilities();
   const [content, setContent] = useState(initialContent || "");
   const [showPicker, setShowPicker] = useState(false);
   const [suggestedFolder, setSuggestedFolder] = useState<string | null>(null);
@@ -839,10 +843,8 @@ export default function PostIt({
     return () => window.removeEventListener("keydown", handleDictation);
   }, [systemShortcuts.dictation]);
 
-  // Voice-note global shortcut — Rust fires `start-dictation` after
-  // showing the postit window. The listener is mounted once for the
-  // lifetime of the postit webview, so late-firing events (e.g. fired
-  // before focus transition completes) still land correctly.
+  // Voice-note global shortcut. Dynamic capture windows receive this through
+  // URL params; the default postit still supports the event path.
   useEffect(() => {
     const unlisten = listen("start-dictation", () => {
       // Small delay to make sure the window is focused and the editor
@@ -856,6 +858,15 @@ export default function PostIt({
       unlisten.then((fn) => fn());
     };
   }, []);
+
+  useEffect(() => {
+    if (!autoStartDictation) return;
+    if (vimEnabled === null) return;
+    const timer = window.setTimeout(() => {
+      speechRef.current?.toggle();
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [autoStartDictation, vimEnabled]);
 
   // CMD+/CMD-/CMD+0 to adjust editor font size
   useEffect(() => {
@@ -1043,6 +1054,7 @@ export default function PostIt({
       editorRef.current?.clear();
       contentRef.current = "";
       rotateNewSessionDraftId();
+      await onClose();
     } catch (error) {
       console.error("Failed to pin note:", error);
     } finally {
@@ -1051,6 +1063,7 @@ export default function PostIt({
   }, [
     content,
     isPinning,
+    onClose,
     resolveFolderForAction,
     clearCurrentSessionDraft,
     rotateNewSessionDraftId,
@@ -1671,9 +1684,10 @@ export default function PostIt({
     return () => clearTimeout(timer);
   }, [isSticked, currentStickedId, isPinned, content]);
 
-  // Folder suggestion (capture mode only, debounced 1.5s)
+  // Folder suggestion (capture mode only, debounced 1.5s). Backed by note
+  // embeddings, not the AI assistant.
   useEffect(() => {
-    if (isSticked || content.length < 30) {
+    if (!capabilities.semantic_search || isSticked || content.length < 30) {
       setSuggestedFolder(null);
       return;
     }
@@ -1691,7 +1705,7 @@ export default function PostIt({
     }, 1500);
 
     return () => clearTimeout(timer);
-  }, [content, folder, isSticked]);
+  }, [content, folder, isSticked, capabilities.semantic_search]);
 
   // Clear suggestion when folder changes
   useEffect(() => {
@@ -1967,29 +1981,33 @@ export default function PostIt({
                       >
                         Copy as markdown
                       </button>
-                      <button
-                        onClick={() => void handleCopy("image")}
-                        className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
-                      >
-                        Copy as image
-                      </button>
+                      {capabilities.image_copy && (
+                        <button
+                          onClick={() => void handleCopy("image")}
+                          className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
+                        >
+                          Copy as image
+                        </button>
+                      )}
                       <div className="border-t border-line" />
-                      <button
-                        onClick={async () => {
-                          setIsCopyMenuOpen(false);
-                          try {
-                            await invoke("show_apple_notes_picker_cmd");
-                          } catch (err) {
-                            console.error(
-                              "Failed to open Apple Notes picker:",
-                              err,
-                            );
-                          }
-                        }}
-                        className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
-                      >
-                        Import from Apple Notes
-                      </button>
+                      {capabilities.apple_notes && (
+                        <button
+                          onClick={async () => {
+                            setIsCopyMenuOpen(false);
+                            try {
+                              await invoke("show_apple_notes_picker_cmd");
+                            } catch (err) {
+                              console.error(
+                                "Failed to open Apple Notes picker:",
+                                err,
+                              );
+                            }
+                          }}
+                          className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
+                        >
+                          Import from Apple Notes
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -2069,16 +2087,18 @@ export default function PostIt({
                   }}
                 />
 
-                <AiMenu
-                  content={content}
-                  folder={folder}
-                  onApplyText={(text) => {
-                    editorRef.current?.setContent(text);
-                    setContent(text);
-                  }}
-                  onShowToast={(msg) => setToast(msg)}
-                  disabled={!hasMeaningfulContent}
-                />
+                {capabilities.ai_assistant && (
+                  <AiMenu
+                    content={content}
+                    folder={folder}
+                    onApplyText={(text) => {
+                      editorRef.current?.setContent(text);
+                      setContent(text);
+                    }}
+                    onShowToast={(msg) => setToast(msg)}
+                    disabled={!hasMeaningfulContent}
+                  />
+                )}
 
                 {isSticked && isPinned ? (
                   <div className="flex items-center gap-1.5">
@@ -2114,23 +2134,6 @@ export default function PostIt({
                   >
                     esc
                   </button>
-                ) : isRecoveredSessionDraft ? (
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      onClick={handleCloseWithoutSaving}
-                      className="px-2 py-1 rounded-md hover:bg-line text-stone hover:text-ink transition-colors text-[10px]"
-                      title={t("postit.closeWithoutSaving")}
-                    >
-                      {t("common.discard")}
-                    </button>
-                    <button
-                      onClick={handleSaveAndClose}
-                      className="px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors bg-coral text-white hover:bg-coral/90"
-                      title={t("postit.saveAndClose")}
-                    >
-                      {t("common.save")}
-                    </button>
-                  </div>
                 ) : (
                   <button
                     onClick={handleSaveAndClose}

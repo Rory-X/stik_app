@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "dev:desktop": "npm run build:sidecar && tauri dev",
+    "dev:desktop:win": "tauri dev",
     "verify": "npm test && npm run build && cd src-tauri && cargo check",
     "release": "./scripts/release.sh",
     "release:patch": "./scripts/release.sh patch",

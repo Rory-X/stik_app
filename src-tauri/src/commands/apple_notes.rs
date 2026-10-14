@@ -1,16 +1,27 @@
+// Apple Notes import reads the Notes SQLite store and decodes Apple's
+// protobuf note format. Both are macOS-only, so every implementation detail
+// below is gated; the four Tauri commands at the bottom exist on all
+// platforms so `generate_handler!` never needs a cfg.
+#[cfg(target_os = "macos")]
 use flate2::read::GzDecoder;
+#[cfg(target_os = "macos")]
 use prost::Message;
+#[cfg(target_os = "macos")]
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "macos")]
 use std::io::Read;
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 // Generated protobuf types from apple_notes.proto
+#[cfg(target_os = "macos")]
 mod proto {
     include!(concat!(env!("OUT_DIR"), "/apple.notes.rs"));
 }
 
 // Core Foundation epoch offset: seconds between 1970-01-01 and 2001-01-01
+#[cfg(target_os = "macos")]
 const CF_EPOCH_OFFSET: i64 = 978_307_200;
 
 // ── Data types returned to frontend ──
@@ -27,6 +38,7 @@ pub struct AppleNoteEntry {
 
 // ── SQLite connection ──
 
+#[cfg(target_os = "macos")]
 fn notes_db_path() -> String {
     let home = dirs::home_dir().unwrap_or_default();
     home.join("Library/Group Containers/group.com.apple.notes/NoteStore.sqlite")
@@ -34,6 +46,7 @@ fn notes_db_path() -> String {
         .to_string()
 }
 
+#[cfg(target_os = "macos")]
 fn open_readonly_connection() -> Result<Connection, String> {
     let path = notes_db_path();
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
@@ -58,6 +71,7 @@ fn open_readonly_connection() -> Result<Connection, String> {
     Ok(conn)
 }
 
+#[cfg(target_os = "macos")]
 fn cf_timestamp_to_iso(cf_ts: f64) -> String {
     let unix_ts = cf_ts as i64 + CF_EPOCH_OFFSET;
     chrono::DateTime::from_timestamp(unix_ts, 0)
@@ -71,6 +85,7 @@ fn cf_timestamp_to_iso(cf_ts: f64) -> String {
 /// Apple increments this column name across macOS releases:
 ///   10.13–10.14 → ZACCOUNT2, 10.15–11 → ZACCOUNT3,
 ///   12 → ZACCOUNT4, 13+ → ZACCOUNT7
+#[cfg(target_os = "macos")]
 fn detect_account_column(conn: &Connection) -> &'static str {
     let columns: Vec<String> = conn
         .prepare("PRAGMA table_info(ZICCLOUDSYNCINGOBJECT)")
@@ -91,6 +106,7 @@ fn detect_account_column(conn: &Connection) -> &'static str {
 
 // ── List notes ──
 
+#[cfg(target_os = "macos")]
 fn list_apple_notes_inner() -> Result<Vec<AppleNoteEntry>, String> {
     let conn = open_readonly_connection()?;
     let account_col = detect_account_column(&conn);
@@ -149,6 +165,7 @@ fn list_apple_notes_inner() -> Result<Vec<AppleNoteEntry>, String> {
 
 // ── Import note: gzip + protobuf pipeline ──
 
+#[cfg(target_os = "macos")]
 pub fn import_apple_note_inner(note_id: i64) -> Result<String, String> {
     let conn = open_readonly_connection()?;
 
@@ -190,6 +207,7 @@ pub fn import_apple_note_inner(note_id: i64) -> Result<String, String> {
 
 // ── Protobuf → Markdown converter ──
 
+#[cfg(target_os = "macos")]
 fn protobuf_to_markdown(note: &proto::Note) -> String {
     let text = note.note_text.as_deref().unwrap_or("");
     let chars: Vec<char> = text.chars().collect();
@@ -333,6 +351,7 @@ fn protobuf_to_markdown(note: &proto::Note) -> String {
     output.trim_end().to_string()
 }
 
+#[cfg(target_os = "macos")]
 fn apply_inline_formatting(text: &str, font_weight: i32, strikethrough: i32, link: Option<&str>) -> String {
     if text.is_empty() {
         return String::new();
@@ -360,36 +379,72 @@ fn apply_inline_formatting(text: &str, font_weight: i32, strikethrough: i32, lin
 }
 
 // ── Tauri commands ──
+//
+// These four keep identical signatures on every platform so that
+// `generate_handler!` in main.rs needs no cfg, and so the frontend can keep
+// calling them unconditionally. Off macOS they report the feature as absent.
+
+#[cfg(not(target_os = "macos"))]
+const APPLE_NOTES_UNAVAILABLE: &str = "Apple Notes import is only available on macOS";
 
 #[tauri::command]
 pub fn list_apple_notes() -> Result<Vec<AppleNoteEntry>, String> {
-    list_apple_notes_inner()
+    #[cfg(target_os = "macos")]
+    {
+        list_apple_notes_inner()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(APPLE_NOTES_UNAVAILABLE.to_string())
+    }
 }
 
 #[tauri::command]
 pub fn import_apple_note(note_id: i64) -> Result<String, String> {
-    import_apple_note_inner(note_id)
+    #[cfg(target_os = "macos")]
+    {
+        import_apple_note_inner(note_id)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = note_id;
+        Err(APPLE_NOTES_UNAVAILABLE.to_string())
+    }
 }
 
 #[tauri::command]
 pub fn open_full_disk_access_settings() -> Result<(), String> {
-    Command::new("open")
-        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
-        .spawn()
-        .map_err(|e| format!("Failed to open System Settings: {}", e))?;
-    Ok(())
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+            .spawn()
+            .map_err(|e| format!("Failed to open System Settings: {}", e))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(APPLE_NOTES_UNAVAILABLE.to_string())
+    }
 }
 
 #[tauri::command]
 pub fn check_apple_notes_access() -> Result<bool, String> {
-    let conn = open_readonly_connection();
-    match conn {
-        Ok(_) => Ok(true),
-        Err(e) if e.starts_with("FULL_DISK_ACCESS_REQUIRED") => Ok(false),
-        Err(e) => Err(e),
+    #[cfg(target_os = "macos")]
+    {
+        match open_readonly_connection() {
+            Ok(_) => Ok(true),
+            Err(e) if e.starts_with("FULL_DISK_ACCESS_REQUIRED") => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(false)
     }
 }
 
+#[cfg(target_os = "macos")]
 #[cfg(test)]
 mod tests {
     use super::*;

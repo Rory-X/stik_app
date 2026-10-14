@@ -610,6 +610,7 @@ export const en = {
   "command.footer.moveNote": "Move note",
   "command.footer.newNote": "New note",
   "command.footer.lock": "Lock",
+  "command.footer.pin": "Top",
   "command.footer.moveSidebar": "Move sidebar",
   "command.footer.close": "Close",
   "command.sidebar.allFolders": "All Folders",
@@ -631,6 +632,10 @@ export const en = {
   "command.toast.createFolderFirst": "Create a folder first",
   "command.toast.noteUnlocked": "Note unlocked",
   "command.toast.noteLocked": "Note locked",
+  "command.toast.notePinned": "Moved to Top",
+  "command.toast.noteUnpinned": "Removed from Top",
   "command.toast.openFailed": "Couldn't open note: {error}",
+  "command.toast.lockedUnsupported":
+    "Locked notes can't be opened on this device yet",
   "command.toast.noteMoved": "Moved to {folder}",
 } as const;

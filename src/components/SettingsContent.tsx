@@ -34,6 +34,7 @@ import {
 import { useI18n } from "@/i18n/react";
 import type { MessageKey } from "@/i18n";
 import { translateBackendError } from "@/i18n/errors";
+import { usePlatformCapabilities } from "@/hooks/usePlatformCapabilities";
 
 type Translator = (
   key: MessageKey,
@@ -213,6 +214,7 @@ function PrivacySection({
   onSettingsChange: (settings: StikSettings) => void;
 }) {
   const { t } = useI18n();
+  const capabilities = usePlatformCapabilities();
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [authAvailable, setAuthAvailable] = useState(false);
@@ -229,10 +231,11 @@ function PrivacySection({
 
   useEffect(() => {
     loadDeviceId();
+    if (!capabilities.note_lock) return;
     invoke<boolean>("auth_available")
       .then(setAuthAvailable)
       .catch(() => {});
-  }, [loadDeviceId]);
+  }, [loadDeviceId, capabilities.note_lock]);
 
   const copyDeviceId = () => {
     if (!deviceId) return;
@@ -278,7 +281,8 @@ function PrivacySection({
   return (
     <>
       <div className="space-y-4">
-        {/* Note Locking */}
+        {/* Note Locking (macOS only — hidden until password unlock lands) */}
+        {capabilities.note_lock && (
         <div className="space-y-3">
           <p className="text-[11px] font-semibold text-stone uppercase tracking-wider">
             {t("settings.privacy.noteLocking")}
@@ -423,6 +427,7 @@ function PrivacySection({
             </>
           )}
         </div>
+        )}
 
         {/* Analytics */}
         <div className="mt-2">
@@ -1705,6 +1710,16 @@ export default function SettingsContent({
 }: SettingsContentProps) {
   const [showGitAdvanced, setShowGitAdvanced] = useState(false);
   const { t } = useI18n();
+  const capabilities = usePlatformCapabilities();
+  // iCloud is macOS-only: on other platforms the toggle and its notices are
+  // hidden, and the notes directory / Git sharing stay usable.
+  const isIcloudEnabled =
+    capabilities.icloud && (settings.icloud?.enabled ?? false);
+  // System shortcuts that this platform actually supports. The values stay in
+  // settings so nothing is lost when a shortcut is only hidden here.
+  const visibleSystemShortcutActions = SYSTEM_SHORTCUT_ACTIONS.filter(
+    (action) => action !== "clip_capture" || capabilities.clip_capture,
+  );
   const systemShortcutLabel = (action: SystemAction) => {
     const labels: Record<SystemAction, ReturnType<typeof t>> = {
       search: t("systemShortcuts.commandPalette"),
@@ -1912,7 +1927,7 @@ export default function SettingsContent({
               {t("settings.shortcuts.systemShortcuts")}
             </p>
             <div className="space-y-2">
-              {SYSTEM_SHORTCUT_ACTIONS.map((action) => {
+              {visibleSystemShortcutActions.map((action) => {
                 const currentShortcut =
                   settings.system_shortcuts?.[action] ??
                   SYSTEM_SHORTCUT_DEFAULTS[action];
@@ -1991,7 +2006,7 @@ export default function SettingsContent({
                 );
               })}
             </div>
-            {SYSTEM_SHORTCUT_ACTIONS.some(
+            {visibleSystemShortcutActions.some(
               (a) =>
                 (settings.system_shortcuts?.[a] ??
                   SYSTEM_SHORTCUT_DEFAULTS[a]) !== SYSTEM_SHORTCUT_DEFAULTS[a],
@@ -2015,71 +2030,81 @@ export default function SettingsContent({
 
       {activeTab === "folders" && (
         <div className="space-y-4">
-          {/* iCloud Drive sync */}
-          <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
-            <div>
-              <p className="text-[13px] text-ink font-medium">iCloud Drive</p>
-              <p className="mt-1 text-[12px] text-stone leading-relaxed">
-                {t("settings.folders.icloudDescription")}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                const newICloud = {
-                  ...settings.icloud,
-                  enabled: !settings.icloud?.enabled,
-                };
-                onSettingsChange({ ...settings, icloud: newICloud });
-              }}
-              className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
-                settings.icloud?.enabled ? "bg-coral" : "bg-line"
-              }`}
-              title={t("settings.folders.toggleIcloud")}
-            >
-              <span
-                className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
-                  settings.icloud?.enabled ? "translate-x-5" : "translate-x-0"
-                }`}
-              />
-            </button>
-          </label>
-
-          {settings.icloud?.enabled && (
-            <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
-              <p className="text-[12px] text-stone leading-relaxed">
-                {t("settings.folders.icloudEnabledNotice")}
-              </p>
-              {!settings.icloud?.migrated && (
+          {/* iCloud Drive sync (macOS only) */}
+          {capabilities.icloud && (
+            <>
+              <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
+                <div>
+                  <p className="text-[13px] text-ink font-medium">
+                    iCloud Drive
+                  </p>
+                  <p className="mt-1 text-[12px] text-stone leading-relaxed">
+                    {t("settings.folders.icloudDescription")}
+                  </p>
+                </div>
                 <button
                   type="button"
-                  onClick={async () => {
-                    const { invoke } = await import("@tauri-apps/api/core");
-                    try {
-                      const result = await invoke<{
-                        files_copied: number;
-                        errors: string[];
-                      }>("icloud_migrate_notes");
-                      if (result.files_copied > 0) {
-                        onSettingsChange({
-                          ...settings,
-                          icloud: { ...settings.icloud, migrated: true },
-                        });
-                      }
-                    } catch (e) {
-                      console.error("Migration failed:", e);
-                    }
+                  onClick={() => {
+                    const newICloud = {
+                      ...settings.icloud,
+                      enabled: !settings.icloud?.enabled,
+                    };
+                    onSettingsChange({ ...settings, icloud: newICloud });
                   }}
-                  className="mt-2 px-3 py-1.5 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors"
+                  className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
+                    settings.icloud?.enabled ? "bg-coral" : "bg-line"
+                  }`}
+                  title={t("settings.folders.toggleIcloud")}
                 >
-                  {t("settings.folders.copyToIcloud")}
+                  <span
+                    className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
+                      settings.icloud?.enabled
+                        ? "translate-x-5"
+                        : "translate-x-0"
+                    }`}
+                  />
                 </button>
+              </label>
+
+              {settings.icloud?.enabled && (
+                <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
+                  <p className="text-[12px] text-stone leading-relaxed">
+                    {t("settings.folders.icloudEnabledNotice")}
+                  </p>
+                  {!settings.icloud?.migrated && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const { invoke } = await import(
+                          "@tauri-apps/api/core"
+                        );
+                        try {
+                          const result = await invoke<{
+                            files_copied: number;
+                            errors: string[];
+                          }>("icloud_migrate_notes");
+                          if (result.files_copied > 0) {
+                            onSettingsChange({
+                              ...settings,
+                              icloud: { ...settings.icloud, migrated: true },
+                            });
+                          }
+                        } catch (e) {
+                          console.error("Migration failed:", e);
+                        }
+                      }}
+                      className="mt-2 px-3 py-1.5 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors"
+                    >
+                      {t("settings.folders.copyToIcloud")}
+                    </button>
+                  )}
+                </div>
               )}
-            </div>
+            </>
           )}
 
           {/* Notes directory (hidden when iCloud is active) */}
-          {!settings.icloud?.enabled && (
+          {!isIcloudEnabled && (
             <div>
               <p className="text-[12px] text-stone mb-1.5">
                 {t("settings.folders.notesDirectory")}
@@ -2167,7 +2192,7 @@ export default function SettingsContent({
             </p>
           </div>
 
-          {!settings.icloud?.enabled &&
+          {!isIcloudEnabled &&
           settings.git_sharing.enabled &&
           gitSyncStatus?.repo_initialized ? (
             <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
@@ -2189,7 +2214,7 @@ export default function SettingsContent({
                 )}
               </p>
             </div>
-          ) : !settings.icloud?.enabled ? (
+          ) : !isIcloudEnabled ? (
             <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
               <p className="text-[12px] text-stone leading-relaxed">
                 {t("settings.folders.syncTip", { path: notesDir })}
@@ -2295,6 +2320,7 @@ export default function SettingsContent({
             </div>
           </div>
 
+          {capabilities.hide_dock_icon && (
           <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
             <div>
               <p className="text-[13px] text-ink font-medium">
@@ -2324,6 +2350,7 @@ export default function SettingsContent({
               />
             </button>
           </label>
+          )}
 
           <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
             <div>
@@ -2421,7 +2448,7 @@ export default function SettingsContent({
 
       {activeTab === "git" && (
         <div className="space-y-3">
-          {settings.icloud?.enabled && (
+          {isIcloudEnabled && (
             <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl mb-2">
               <p className="text-[12px] text-stone leading-relaxed">
                 {t("settings.git.icloudDisabled")}
@@ -2431,7 +2458,7 @@ export default function SettingsContent({
 
           {/* Enable toggle */}
           <label
-            className={`flex items-center justify-between gap-3 ${settings.icloud?.enabled ? "opacity-50 pointer-events-none" : ""}`}
+            className={`flex items-center justify-between gap-3 ${isIcloudEnabled ? "opacity-50 pointer-events-none" : ""}`}
           >
             <span className="text-[13px] text-ink font-medium">
               {t("settings.git.enable")}
@@ -2657,7 +2684,8 @@ export default function SettingsContent({
         </div>
       )}
 
-      {activeTab === "ai" && (
+      {activeTab === "ai" &&
+        (capabilities.ai_assistant || capabilities.semantic_search) && (
         <div className="space-y-4">
           <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
             <div>

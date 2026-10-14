@@ -332,6 +332,13 @@ fn normalize_loaded_settings(mut settings: StikSettings) -> StikSettings {
         settings.dictation.chinese_script = "simplified".to_string();
     }
 
+    // iCloud storage only exists on macOS and its toggle is hidden elsewhere,
+    // so a settings file copied from a Mac must not leave notes unreachable.
+    #[cfg(not(target_os = "macos"))]
+    {
+        settings.icloud.enabled = false;
+    }
+
     settings
 }
 
@@ -619,5 +626,15 @@ mod tests {
         let normalized = normalize_loaded_settings(settings);
 
         assert_eq!(normalized.dictation.chinese_script, "simplified");
+    }
+
+    #[test]
+    fn normalization_keeps_icloud_storage_only_on_macos() {
+        let mut settings = StikSettings::default();
+        settings.icloud.enabled = true;
+
+        let normalized = normalize_loaded_settings(settings);
+
+        assert_eq!(normalized.icloud.enabled, cfg!(target_os = "macos"));
     }
 }

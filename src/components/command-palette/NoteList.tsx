@@ -166,6 +166,14 @@ export default function NoteList({
             }`}
           >
             <div className="flex items-center gap-2">
+              {result.pinned && (
+                <span
+                  className="shrink-0 text-[12px] text-coral"
+                  title="Top"
+                >
+                  ★
+                </span>
+              )}
               {result.locked && (
                 <svg
                   width="12"

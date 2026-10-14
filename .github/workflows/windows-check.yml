@@ -1,0 +1,58 @@
+# Windows check: verify the project still compiles and its tests pass on
+# windows-latest (frontend build + `cargo check`/`cargo test` on src-tauri).
+# Compile/test only — no bundling, signing or artifact upload (that is phase 4).
+name: Windows check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: windows-check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows-check:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        # No submodules: src-tauri/darwinkit is an SSH remote and macOS-only.
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Test (frontend)
+        run: npm test
+
+      - name: Build (frontend)
+        run: npm run build
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Cargo check
+        working-directory: src-tauri
+        run: cargo check --all-targets --locked
+
+      - name: Cargo test
+        working-directory: src-tauri
+        run: cargo test --locked

@@ -577,6 +577,7 @@ export const zhCN = {
   "command.footer.moveNote": "移动笔记",
   "command.footer.newNote": "新建笔记",
   "command.footer.lock": "锁定",
+  "command.footer.pin": "置顶",
   "command.footer.moveSidebar": "移动侧栏",
   "command.footer.close": "关闭",
   "command.sidebar.allFolders": "所有文件夹",
@@ -597,6 +598,9 @@ export const zhCN = {
   "command.toast.createFolderFirst": "请先创建一个文件夹",
   "command.toast.noteUnlocked": "笔记已解锁",
   "command.toast.noteLocked": "笔记已锁定",
+  "command.toast.notePinned": "已置顶",
+  "command.toast.noteUnpinned": "已取消置顶",
   "command.toast.openFailed": "无法打开笔记：{error}",
+  "command.toast.lockedUnsupported": "这台设备暂时还不能打开加密笔记",
   "command.toast.noteMoved": "已移动到 {folder}",
 } as const satisfies Record<MessageKey, string>;

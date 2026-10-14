@@ -6,9 +6,11 @@ import { useI18n } from "@/i18n/react";
 interface FolderSidebarProps {
   folderStats: FolderStats[];
   totalNoteCount: number;
+  pinnedNoteCount: number;
   selectedFolder: string | null;
   folderColors: Record<string, string>;
   focused: boolean;
+  topFolderId: string;
   isCreating: boolean;
   newFolderName: string;
   newFolderColor: string;
@@ -31,9 +33,11 @@ interface FolderSidebarProps {
 export default function FolderSidebar({
   folderStats,
   totalNoteCount,
+  pinnedNoteCount,
   selectedFolder,
   folderColors,
   focused,
+  topFolderId,
   isCreating,
   newFolderName,
   newFolderColor,
@@ -81,6 +85,39 @@ export default function FolderSidebar({
             }`}
           >
             {totalNoteCount}
+          </span>
+        </button>
+
+        <button
+          onClick={() => onSelectFolder(topFolderId)}
+          className={`w-full px-3 py-2 flex items-center gap-2 text-left text-[12px] font-medium transition-colors ${
+            selectedFolder === topFolderId
+              ? focused
+                ? "bg-coral text-white"
+                : "bg-coral/10 text-coral"
+              : "text-ink hover:bg-line/50"
+          }`}
+        >
+          <span
+            className={`text-[12px] ${
+              selectedFolder === topFolderId && focused
+                ? "text-white/90"
+                : "text-coral"
+            }`}
+          >
+            ★
+          </span>
+          <span className="flex-1">Top</span>
+          <span
+            className={`text-[10px] px-1.5 py-0.5 rounded ${
+              selectedFolder === topFolderId
+                ? focused
+                  ? "bg-white/20 text-white/90"
+                  : "bg-coral/20 text-coral"
+                : "bg-line text-stone"
+            }`}
+          >
+            {pinnedNoteCount}
           </span>
         </button>
 

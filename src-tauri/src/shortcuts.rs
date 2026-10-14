@@ -226,6 +226,13 @@ pub fn register_shortcuts_from_settings(app: &AppHandle, settings: &StikSettings
 
     let local_only = settings::local_only_actions();
     for (action, shortcut_str) in &settings.system_shortcuts {
+        // Clipboard capture is a macOS-only feature (Accessibility API), so
+        // don't register a global hotkey for a feature that doesn't exist.
+        #[cfg(not(target_os = "macos"))]
+        if action == "clip_capture" {
+            continue;
+        }
+
         if let Some(shortcut) = parse_shortcut_string(shortcut_str) {
             let key = shortcut_to_string(&shortcut);
             action_map.insert(key, action.clone());

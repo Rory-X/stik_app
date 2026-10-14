@@ -170,6 +170,7 @@ function computeEditorTokens(colors: ThemeColors, isDark: boolean) {
   const accentHex = rgbToHex(colors.accent);
   const stoneHex = rgbToHex(colors.stone);
   const lineHex = rgbToHex(colors.line);
+  const surfaceHex = rgbToHex(colors.surface);
 
   // Highlight background: use theme-provided color if set, else amber-300 default.
   const highlightRgb = colors.highlight ?? "253 224 71";
@@ -179,8 +180,37 @@ function computeEditorTokens(colors: ThemeColors, isDark: boolean) {
     "--editor-placeholder": isDark ? "#666" : "#bbb",
     "--editor-strikethrough": stoneHex,
     "--editor-code-bg": lineHex,
-    "--editor-code-block-bg": isDark ? "#0f0e0d" : "#1a1a1a",
-    "--editor-code-block-text": isDark ? "#e8e4df" : "#f0f0f0",
+    "--editor-code-block-bg": isDark ? "#171412" : surfaceHex,
+    "--editor-code-block-header-bg": isDark ? "#211d1a" : "#fbf7f2",
+    "--editor-code-block-border": isDark
+      ? "rgba(255, 255, 255, 0.13)"
+      : "rgba(26, 26, 26, 0.13)",
+    "--editor-code-block-text": isDark ? "#f8efe7" : "#171717",
+    "--editor-code-block-control-bg": isDark
+      ? "rgba(255, 255, 255, 0.07)"
+      : "rgba(255, 255, 255, 0.92)",
+    "--editor-code-block-control-hover-bg": isDark
+      ? "rgba(255, 255, 255, 0.12)"
+      : "rgba(26, 26, 26, 0.06)",
+    "--editor-code-block-control-border": isDark
+      ? "rgba(255, 255, 255, 0.15)"
+      : "rgba(26, 26, 26, 0.16)",
+    "--editor-code-block-control-text": isDark ? "#f1e7de" : "#3a332f",
+    "--editor-code-token-comment": isDark ? "#b7aea5" : "#6a625c",
+    "--editor-code-token-keyword": isDark ? "#ff8a80" : "#cf222e",
+    "--editor-code-token-definition-keyword": isDark ? "#f0a6ff" : "#8250df",
+    "--editor-code-token-string": isDark ? "#8ee59f" : "#116329",
+    "--editor-code-token-number": isDark ? "#ffc875" : "#953800",
+    "--editor-code-token-function": isDark ? "#7dd3fc" : "#0969da",
+    "--editor-code-token-definition": isDark ? "#67e8f9" : "#0a7785",
+    "--editor-code-token-type": isDark ? "#c4b5fd" : "#6f42c1",
+    "--editor-code-token-property": isDark ? "#93c5fd" : "#0550ae",
+    "--editor-code-token-operator": isDark ? "#f9a66c" : "#bc4c00",
+    "--editor-code-token-punctuation": isDark ? "#d6cdc4" : "#4f575e",
+    "--editor-code-token-regexp": isDark ? "#ff9fbc" : "#b2526e",
+    "--editor-code-token-escape": isDark ? "#d8b4fe" : "#8b5cf6",
+    "--editor-code-token-invalid": isDark ? "#ff6b6b" : "#b42318",
+    "--editor-code-token-label": isDark ? "#c8beb5" : "#6a625c",
     "--editor-checked-task": stoneHex,
     "--editor-link": accentHex,
     "--editor-marker": accentHex,

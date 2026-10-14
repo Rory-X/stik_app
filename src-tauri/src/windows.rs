@@ -1,7 +1,12 @@
 use crate::commands::{notes, session_drafts, settings, sticked_notes};
 use crate::state::{AppState, ImagePreviewContent, LastSavedNote};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use sticked_notes::StickedNote;
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, Emitter, LogicalPosition, Manager, PhysicalPosition, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
+};
 
 const SETTINGS_WINDOW_WIDTH: f64 = 860.0;
 const SETTINGS_WINDOW_HEIGHT: f64 = 720.0;
@@ -10,20 +15,23 @@ const SETTINGS_WINDOW_MIN_HEIGHT: f64 = 560.0;
 
 /// Minimum overlap (in physical pixels) between window and monitor for the position to be usable.
 const MIN_OVERLAP: f64 = 80.0;
+const CAPTURE_CURSOR_OFFSET: f64 = 18.0;
+const CAPTURE_MONITOR_MARGIN: f64 = 16.0;
+static CAPTURE_WINDOW_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DesktopRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
 
 /// Check if a window at (x, y) with the given size overlaps sufficiently with any connected
 /// monitor. All coordinates are in **physical pixels** (same space as `outerPosition()`).
 /// Uses rectangle intersection — handles negative coordinates from left/top monitors.
 fn is_window_visible_on_any_monitor(app: &AppHandle, x: f64, y: f64, w: f64, h: f64) -> bool {
-    let monitors = app
-        .get_webview_window("postit")
-        .and_then(|win| win.available_monitors().ok());
-
-    let Some(monitors) = monitors else {
-        return false;
-    };
-
-    for monitor in monitors {
+    for monitor in app.available_monitors().unwrap_or_default() {
         let pos = monitor.position();
         let size = monitor.size();
 
@@ -45,6 +53,10 @@ fn is_window_visible_on_any_monitor(app: &AppHandle, x: f64, y: f64, w: f64, h: 
     false
 }
 
+fn is_capture_window_label(label: &str) -> bool {
+    label == "postit" || label.starts_with("capture-")
+}
+
 fn remember_last_note(state: &AppState, path: &str, folder: &str) {
     if path.trim().is_empty() {
         return;
@@ -60,39 +72,234 @@ fn remember_last_note(state: &AppState, path: &str, folder: &str) {
     });
 }
 
-pub fn show_postit_with_folder(app: &AppHandle, folder: &str) {
-    if let Some(window) = app.get_webview_window("postit") {
-        if let Ok(s) = settings::load_settings_from_file() {
-            // Restore persisted capture window size
-            let (w, h) = s.capture_window_size.unwrap_or((400.0, 280.0));
-            if s.capture_window_size.is_some() {
-                let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(w, h)));
+fn rect_contains_point(rect: &DesktopRect, x: f64, y: f64) -> bool {
+    x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height
+}
+
+fn clamp_window_axis(desired: f64, start: f64, extent: f64, window_extent: f64) -> f64 {
+    let min = start + CAPTURE_MONITOR_MARGIN;
+    let max = start + extent - window_extent - CAPTURE_MONITOR_MARGIN;
+
+    if max < min {
+        return start + ((extent - window_extent) / 2.0).max(0.0);
+    }
+
+    desired.clamp(min, max)
+}
+
+fn capture_position_near_cursor(
+    cursor: (f64, f64),
+    window_size: (f64, f64),
+    monitors: &[DesktopRect],
+) -> Option<(f64, f64)> {
+    let monitor = monitors
+        .iter()
+        .find(|monitor| rect_contains_point(monitor, cursor.0, cursor.1))
+        .or_else(|| monitors.first())?;
+
+    let desired_x = cursor.0 + CAPTURE_CURSOR_OFFSET;
+    let desired_y = cursor.1 + CAPTURE_CURSOR_OFFSET;
+    let x = clamp_window_axis(desired_x, monitor.x, monitor.width, window_size.0);
+    let y = clamp_window_axis(desired_y, monitor.y, monitor.height, window_size.1);
+
+    Some((x.round(), y.round()))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn monitor_rects(app: &AppHandle) -> Vec<DesktopRect> {
+    app.available_monitors()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|monitor| {
+            let pos = monitor.position();
+            let size = monitor.size();
+            DesktopRect {
+                x: pos.x as f64,
+                y: pos.y as f64,
+                width: size.width as f64,
+                height: size.height as f64,
             }
-            // Restore position only if it's visible on a connected monitor.
-            if let Some((x, y)) = s.viewing_window_position {
-                if is_window_visible_on_any_monitor(app, x, y, w, h) {
-                    let _ = window.set_position(tauri::Position::Physical(
-                        PhysicalPosition::new(x as i32, y as i32),
-                    ));
-                } else {
-                    let _ = window.center();
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn monitor_rects_logical(app: &AppHandle) -> Vec<DesktopRect> {
+    app.available_monitors()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|monitor| {
+            let scale = monitor.scale_factor();
+            let pos = monitor.position();
+            let size = monitor.size();
+            DesktopRect {
+                x: pos.x as f64 / scale,
+                y: pos.y as f64 / scale,
+                width: size.width as f64 / scale,
+                height: size.height as f64 / scale,
+            }
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_cursor_position_logical() -> Option<(f64, f64)> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSEvent, NSScreen};
+
+    let point = NSEvent::mouseLocation();
+    let mtm = MainThreadMarker::new()?;
+    let main_screen = NSScreen::mainScreen(mtm)?;
+    let main_frame = main_screen.frame();
+    Some((point.x, main_frame.size.height - point.y))
+}
+
+#[cfg(target_os = "macos")]
+fn position_capture_window_near_cursor(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    logical_width: f64,
+    logical_height: f64,
+) -> bool {
+    let Some(cursor) = macos_cursor_position_logical() else {
+        return false;
+    };
+
+    let monitors = monitor_rects_logical(app);
+    let Some((x, y)) =
+        capture_position_near_cursor(cursor, (logical_width, logical_height), &monitors)
+    else {
+        return false;
+    };
+
+    window
+        .set_position(tauri::Position::Logical(LogicalPosition::new(x, y)))
+        .is_ok()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn position_capture_window_near_cursor(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    logical_width: f64,
+    logical_height: f64,
+) -> bool {
+    let Ok(cursor) = app.cursor_position() else {
+        return false;
+    };
+
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let window_size = (logical_width * scale, logical_height * scale);
+    let monitors = monitor_rects(app);
+    let Some((x, y)) = capture_position_near_cursor((cursor.x, cursor.y), window_size, &monitors)
+    else {
+        return false;
+    };
+
+    window
+        .set_position(tauri::Position::Physical(PhysicalPosition::new(
+            x as i32, y as i32,
+        )))
+        .is_ok()
+}
+
+fn next_capture_window_label() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let counter = CAPTURE_WINDOW_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("capture-{millis}-{counter}")
+}
+
+pub fn attach_capture_window_blur_event(window: &WebviewWindow) {
+    let w = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::Focused(focused) = event {
+            if !focused {
+                // Don't hide when Apple Notes picker took focus.
+                if w.app_handle()
+                    .get_webview_window("apple-notes-picker")
+                    .is_some()
+                {
+                    return;
                 }
+                let _ = w.emit("postit-blur", ());
             }
         }
-        let _ = window.show();
-        let _ = window.set_focus();
-        let _ = window.emit("shortcut-triggered", folder);
+    });
+}
+
+fn show_capture_window_with_folder(
+    app: &AppHandle,
+    folder: &str,
+    start_dictation: bool,
+) -> Result<(), String> {
+    let saved_settings = settings::load_settings_from_file().ok();
+    let (width, height) = saved_settings
+        .as_ref()
+        .and_then(|s| s.capture_window_size)
+        .unwrap_or((400.0, 280.0));
+    let label = next_capture_window_label();
+    let mut url = format!(
+        "index.html?window=capture&folder={}",
+        encode_query_component(folder)
+    );
+    if start_dictation {
+        url.push_str("&startDictation=1");
+    }
+
+    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+        .title("Stik")
+        .inner_size(width, height)
+        .min_inner_size(320.0, 200.0)
+        .max_inner_size(800.0, 600.0)
+        .resizable(true)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false)
+        .build();
+
+    match window {
+        Ok(win) => {
+            let positioned_near_cursor =
+                position_capture_window_near_cursor(app, &win, width, height);
+            if !positioned_near_cursor {
+                let _ = win.center();
+            }
+            attach_capture_window_blur_event(&win);
+            let _ = win.show();
+            let _ = win.set_focus();
+            Ok(())
+        }
+        Err(e) => Err(format!("Failed to create capture window: {}", e)),
+    }
+}
+
+pub fn show_postit_with_folder(app: &AppHandle, folder: &str) {
+    if let Err(err) = show_capture_window_with_folder(app, folder, false) {
+        eprintln!("{err}");
+    }
+}
+
+pub fn show_voice_note_with_folder(app: &AppHandle, folder: &str) {
+    if let Err(err) = show_capture_window_with_folder(app, folder, true) {
+        eprintln!("{err}");
     }
 }
 
 pub fn show_command_palette(app: &AppHandle) {
     {
         let state = app.state::<AppState>();
-        let mut postit_visible = state.postit_was_visible.lock().unwrap_or_else(|e| e.into_inner());
-        *postit_visible = app
-            .get_webview_window("postit")
-            .map(|w| w.is_visible().unwrap_or(false))
-            .unwrap_or(false);
+        let mut postit_visible = state
+            .postit_was_visible
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *postit_visible = app.webview_windows().iter().any(|(label, window)| {
+            is_capture_window_label(label) && window.is_visible().unwrap_or(false)
+        });
     }
 
     for (label, window) in app.webview_windows() {
@@ -124,42 +331,51 @@ pub fn show_command_palette(app: &AppHandle) {
 
     if let Ok(win) = window {
         let app_handle = app.clone();
-        win.on_window_event(move |event| {
-            match event {
-                tauri::WindowEvent::Focused(focused) => {
-                    if !focused {
-                        for (label, window) in app_handle.webview_windows() {
-                            if label.starts_with("sticked-") {
-                                let _ = window.set_always_on_top(true);
-                            }
-                        }
-                    }
-                }
-                tauri::WindowEvent::Destroyed => {
+        win.on_window_event(move |event| match event {
+            tauri::WindowEvent::Focused(focused) => {
+                if !focused {
                     for (label, window) in app_handle.webview_windows() {
                         if label.starts_with("sticked-") {
                             let _ = window.set_always_on_top(true);
                         }
                     }
+                }
+            }
+            tauri::WindowEvent::Destroyed => {
+                for (label, window) in app_handle.webview_windows() {
+                    if label.starts_with("sticked-") {
+                        let _ = window.set_always_on_top(true);
+                    }
+                }
 
-                    let state = app_handle.state::<AppState>();
-                    let postit_visible = *state.postit_was_visible.lock().unwrap_or_else(|e| e.into_inner());
+                let state = app_handle.state::<AppState>();
+                let postit_visible = *state
+                    .postit_was_visible
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
 
-                    if postit_visible {
-                        let has_viewing_windows = app_handle
-                            .webview_windows()
-                            .iter()
-                            .any(|(label, _)| label.starts_with("sticked-view-"));
-                        if !has_viewing_windows {
-                            if let Some(postit) = app_handle.get_webview_window("postit") {
-                                let _ = postit.show();
-                                let _ = postit.set_focus();
-                            }
+                if postit_visible {
+                    let has_viewing_windows = app_handle
+                        .webview_windows()
+                        .iter()
+                        .any(|(label, _)| label.starts_with("sticked-view-"));
+                    if !has_viewing_windows {
+                        if let Some((_, capture)) =
+                            app_handle
+                                .webview_windows()
+                                .into_iter()
+                                .find(|(label, window)| {
+                                    is_capture_window_label(label)
+                                        && window.is_visible().unwrap_or(false)
+                                })
+                        {
+                            let _ = capture.show();
+                            let _ = capture.set_focus();
                         }
                     }
                 }
-                _ => {}
             }
+            _ => {}
         });
     }
 }
@@ -167,11 +383,14 @@ pub fn show_command_palette(app: &AppHandle) {
 pub fn show_settings(app: &AppHandle) {
     {
         let state = app.state::<AppState>();
-        let mut prev_window = state.previous_focused_window.lock().unwrap_or_else(|e| e.into_inner());
+        let mut prev_window = state
+            .previous_focused_window
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *prev_window = None;
 
         for (label, window) in app.webview_windows() {
-            if label.starts_with("sticked-") {
+            if label.starts_with("sticked-") || is_capture_window_label(&label) {
                 if window.is_focused().unwrap_or(false) {
                     *prev_window = Some(label.clone());
                     break;
@@ -179,11 +398,13 @@ pub fn show_settings(app: &AppHandle) {
             }
         }
 
-        let mut postit_visible = state.postit_was_visible.lock().unwrap_or_else(|e| e.into_inner());
-        *postit_visible = app
-            .get_webview_window("postit")
-            .map(|w| w.is_visible().unwrap_or(false))
-            .unwrap_or(false);
+        let mut postit_visible = state
+            .postit_was_visible
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *postit_visible = app.webview_windows().iter().any(|(label, window)| {
+            is_capture_window_label(label) && window.is_visible().unwrap_or(false)
+        });
     }
 
     for (label, window) in app.webview_windows() {
@@ -225,8 +446,14 @@ pub fn show_settings(app: &AppHandle) {
                 }
 
                 let state = app_handle.state::<AppState>();
-                let prev_window = state.previous_focused_window.lock().unwrap_or_else(|e| e.into_inner());
-                let postit_visible = *state.postit_was_visible.lock().unwrap_or_else(|e| e.into_inner());
+                let prev_window = state
+                    .previous_focused_window
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let postit_visible = *state
+                    .postit_was_visible
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
 
                 if let Some(label) = prev_window.as_ref() {
                     if let Some(window) = app_handle.get_webview_window(label) {
@@ -234,9 +461,17 @@ pub fn show_settings(app: &AppHandle) {
                         let _ = window.set_focus();
                     }
                 } else if postit_visible {
-                    if let Some(postit) = app_handle.get_webview_window("postit") {
-                        let _ = postit.show();
-                        let _ = postit.set_focus();
+                    if let Some((_, capture)) =
+                        app_handle
+                            .webview_windows()
+                            .into_iter()
+                            .find(|(label, window)| {
+                                is_capture_window_label(label)
+                                    && window.is_visible().unwrap_or(false)
+                            })
+                    {
+                        let _ = capture.show();
+                        let _ = capture.set_focus();
                     }
                 }
             }
@@ -246,7 +481,11 @@ pub fn show_settings(app: &AppHandle) {
 
 #[tauri::command]
 pub fn hide_window(window: tauri::Window) {
-    let _ = window.hide();
+    if window.label().starts_with("capture-") {
+        let _ = window.close();
+    } else {
+        let _ = window.hide();
+    }
 }
 
 #[tauri::command]
@@ -286,9 +525,9 @@ pub fn create_sticked_window(app: AppHandle, note: StickedNote) -> Result<bool, 
     match window {
         Ok(win) => {
             if let Some((x, y)) = saved_position {
-                let _ = win.set_position(tauri::Position::Physical(
-                    PhysicalPosition::new(x as i32, y as i32),
-                ));
+                let _ = win.set_position(tauri::Position::Physical(PhysicalPosition::new(
+                    x as i32, y as i32,
+                )));
             } else {
                 let _ = win.center();
             }
@@ -340,7 +579,10 @@ pub fn close_sticked_window(app: AppHandle, id: String) -> Result<bool, String> 
     // Clean up viewing note cache to prevent memory leak
     if id.starts_with("view-") {
         let state = app.state::<AppState>();
-        let mut viewing_notes = state.viewing_notes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut viewing_notes = state
+            .viewing_notes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         viewing_notes.remove(&id);
     }
 
@@ -425,7 +667,10 @@ pub async fn open_note_for_viewing(
 
     {
         let state = app.state::<AppState>();
-        let mut viewing_notes = state.viewing_notes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut viewing_notes = state
+            .viewing_notes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         viewing_notes.insert(
             id.clone(),
             crate::state::ViewingNoteContent {
@@ -444,7 +689,9 @@ pub async fn open_note_for_viewing(
         .as_ref()
         .and_then(|s| s.viewing_window_size)
         .unwrap_or((450.0, 320.0));
-    let saved_position = saved_settings.as_ref().and_then(|s| s.viewing_window_position);
+    let saved_position = saved_settings
+        .as_ref()
+        .and_then(|s| s.viewing_window_position);
 
     // Build hidden — we position after creation using PhysicalPosition to avoid
     // the logical/physical mismatch in WebviewWindowBuilder::position().
@@ -465,13 +712,12 @@ pub async fn open_note_for_viewing(
     match window {
         Ok(win) => {
             // Restore saved position in physical pixels, or center as fallback.
-            let positioned = saved_position.is_some_and(|(x, y)| {
-                is_window_visible_on_any_monitor(&app, x, y, width, height)
-            });
+            let positioned = saved_position
+                .is_some_and(|(x, y)| is_window_visible_on_any_monitor(&app, x, y, width, height));
             if let (true, Some((x, y))) = (positioned, saved_position) {
-                let _ = win.set_position(tauri::Position::Physical(
-                    PhysicalPosition::new(x as i32, y as i32),
-                ));
+                let _ = win.set_position(tauri::Position::Physical(PhysicalPosition::new(
+                    x as i32, y as i32,
+                )));
             } else {
                 let _ = win.center();
             }
@@ -487,7 +733,10 @@ pub async fn open_note_for_viewing(
 #[tauri::command]
 pub fn get_viewing_note_content(app: AppHandle, id: String) -> Result<serde_json::Value, String> {
     let state = app.state::<AppState>();
-    let viewing_notes = state.viewing_notes.lock().unwrap_or_else(|e| e.into_inner());
+    let viewing_notes = state
+        .viewing_notes
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
 
     if let Some(note) = viewing_notes.get(&id) {
         Ok(serde_json::json!({
@@ -502,14 +751,21 @@ pub fn get_viewing_note_content(app: AppHandle, id: String) -> Result<serde_json
 }
 
 #[tauri::command]
-pub fn transfer_to_capture(app: AppHandle, content: String, folder: String) -> Result<bool, String> {
+pub fn transfer_to_capture(
+    app: AppHandle,
+    content: String,
+    folder: String,
+) -> Result<bool, String> {
     if let Some(window) = app.get_webview_window("postit") {
         let _ = window.show();
         let _ = window.set_focus();
-        let _ = window.emit("transfer-content", serde_json::json!({
-            "content": content,
-            "folder": folder
-        }));
+        let _ = window.emit(
+            "transfer-content",
+            serde_json::json!({
+                "content": content,
+                "folder": folder
+            }),
+        );
         Ok(true)
     } else {
         Err("Postit window not found".to_string())
@@ -549,7 +805,10 @@ pub fn preview_image(app: AppHandle, src: String, alt: String) -> Result<bool, S
     let payload = ImagePreviewContent { src, alt };
     {
         let state = app.state::<AppState>();
-        let mut image_preview = state.image_preview.lock().unwrap_or_else(|e| e.into_inner());
+        let mut image_preview = state
+            .image_preview
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *image_preview = Some(payload.clone());
     }
 
@@ -596,7 +855,10 @@ pub fn preview_image(app: AppHandle, src: String, alt: String) -> Result<bool, S
 #[tauri::command]
 pub fn get_image_preview_content(app: AppHandle) -> Result<ImagePreviewContent, String> {
     let state = app.state::<AppState>();
-    let image_preview = state.image_preview.lock().unwrap_or_else(|e| e.into_inner());
+    let image_preview = state
+        .image_preview
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     image_preview
         .clone()
         .ok_or_else(|| "No image preview available".to_string())
@@ -606,7 +868,10 @@ pub fn get_image_preview_content(app: AppHandle) -> Result<ImagePreviewContent, 
 pub async fn reopen_last_note(app: AppHandle) -> Result<bool, String> {
     let (path, folder) = {
         let state = app.state::<AppState>();
-        let last = state.last_saved_note.lock().unwrap_or_else(|e| e.into_inner());
+        let last = state
+            .last_saved_note
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         match last.as_ref() {
             Some(note) => (note.path.clone(), note.folder.clone()),
             None => return Err("No note saved yet".to_string()),
@@ -754,7 +1019,10 @@ fn encode_query_component(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{remember_last_note, SETTINGS_WINDOW_MIN_WIDTH, SETTINGS_WINDOW_WIDTH};
+    use super::{
+        capture_position_near_cursor, remember_last_note, DesktopRect, SETTINGS_WINDOW_MIN_WIDTH,
+        SETTINGS_WINDOW_WIDTH,
+    };
     use crate::state::AppState;
 
     #[test]
@@ -762,7 +1030,10 @@ mod tests {
         let state = AppState::new();
         remember_last_note(&state, "/tmp/stik/foo.md", "Inbox");
 
-        let last = state.last_saved_note.lock().unwrap_or_else(|e| e.into_inner());
+        let last = state
+            .last_saved_note
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let note = last.as_ref().expect("last note should be set");
         assert_eq!(note.path, "/tmp/stik/foo.md");
         assert_eq!(note.folder, "Inbox");
@@ -772,5 +1043,55 @@ mod tests {
     fn settings_window_min_width_is_large_enough_for_full_menu_bar() {
         assert!(SETTINGS_WINDOW_MIN_WIDTH >= 760.0);
         assert!(SETTINGS_WINDOW_WIDTH > SETTINGS_WINDOW_MIN_WIDTH);
+    }
+
+    #[test]
+    fn capture_position_opens_near_cursor_with_offset() {
+        let monitors = [DesktopRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1440.0,
+            height: 900.0,
+        }];
+
+        let pos = capture_position_near_cursor((320.0, 240.0), (400.0, 280.0), &monitors);
+
+        assert_eq!(pos, Some((338.0, 258.0)));
+    }
+
+    #[test]
+    fn capture_position_clamps_to_monitor_edges() {
+        let monitors = [DesktopRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1440.0,
+            height: 900.0,
+        }];
+
+        let pos = capture_position_near_cursor((1390.0, 860.0), (400.0, 280.0), &monitors);
+
+        assert_eq!(pos, Some((1024.0, 604.0)));
+    }
+
+    #[test]
+    fn capture_position_supports_negative_coordinate_monitors() {
+        let monitors = [
+            DesktopRect {
+                x: -1280.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 800.0,
+            },
+            DesktopRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1440.0,
+                height: 900.0,
+            },
+        ];
+
+        let pos = capture_position_near_cursor((-1200.0, 120.0), (400.0, 280.0), &monitors);
+
+        assert_eq!(pos, Some((-1182.0, 138.0)));
     }
 }

@@ -4,9 +4,11 @@
   "description": "Default capabilities for Stik",
   "windows": [
     "postit",
+    "capture-*",
     "settings",
     "command-palette",
     "sticked-*",
+    "draft-*",
     "apple-notes-picker",
     "image-preview"
   ],

@@ -12,6 +12,7 @@ import type {
 import {
   createdNoteOpenPayload,
   noteInfosToSearchResults,
+  sortPinnedFirst,
 } from "@/utils/commandPaletteNotes";
 import {
   canMoveNoteToFolder,
@@ -25,6 +26,7 @@ import NoteList from "./command-palette/NoteList";
 import MovePicker from "./command-palette/MovePicker";
 import { useI18n } from "@/i18n/react";
 import { translateBackendError } from "@/i18n/errors";
+import { usePlatformCapabilities } from "@/hooks/usePlatformCapabilities";
 
 function Toast({ message, onDone }: { message: string; onDone: () => void }) {
   const [isVisible, setIsVisible] = useState(false);
@@ -53,8 +55,11 @@ function Toast({ message, onDone }: { message: string; onDone: () => void }) {
   );
 }
 
+const TOP_FOLDER_ID = "__stik_top__";
+
 export default function CommandPalette() {
   const { t } = useI18n();
+  const capabilities = usePlatformCapabilities();
   // Search state
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -69,6 +74,7 @@ export default function CommandPalette() {
   const [folderColors, setFolderColors] = useState<Record<string, string>>({});
   const [selectedFolderIndex, setSelectedFolderIndex] = useState(0);
   const [totalNoteCount, setTotalNoteCount] = useState(0);
+  const [pinnedNoteCount, setPinnedNoteCount] = useState(0);
 
   // Pane focus: "left" = folder sidebar, "right" = note list
   const [focusPane, setFocusPane] = useState<"left" | "right">("right");
@@ -117,6 +123,8 @@ export default function CommandPalette() {
     () => folderNamesFromStats(folderStats),
     [folderStats],
   );
+  const selectedFolderLabel =
+    selectedFolder === TOP_FOLDER_ID ? "Top" : selectedFolder || "";
 
   // Focus input on mount
   useEffect(() => {
@@ -151,6 +159,7 @@ export default function CommandPalette() {
 
       setFolderStats(corrected);
       setTotalNoteCount(allNotes.length);
+      setPinnedNoteCount(allNotes.filter((note) => note.pinned).length);
     } catch (error) {
       console.error("Failed to load folder stats:", error);
     }
@@ -179,11 +188,15 @@ export default function CommandPalette() {
 
   // Load recent notes when folder filter changes
   useEffect(() => {
-    invoke<NoteInfo[]>("list_notes", { folder: selectedFolder }).then(
-      (notes) => {
-        setRecentNotes(noteInfosToSearchResults(notes));
-      },
-    );
+    invoke<NoteInfo[]>("list_notes", {
+      folder: selectedFolder === TOP_FOLDER_ID ? null : selectedFolder,
+    }).then((notes) => {
+      const visibleNotes =
+        selectedFolder === TOP_FOLDER_ID
+          ? notes.filter((note) => note.pinned)
+          : notes;
+      setRecentNotes(sortPinnedFirst(noteInfosToSearchResults(visibleNotes)));
+    });
   }, [selectedFolder]);
 
   // Search: text + semantic in parallel (debounced)
@@ -202,20 +215,31 @@ export default function CommandPalette() {
       const [textResult, semanticResult] = await Promise.allSettled([
         invoke<SearchResult[]>("search_notes", {
           query: trimmed,
-          folder: selectedFolder,
+          folder: selectedFolder === TOP_FOLDER_ID ? null : selectedFolder,
         }),
         invoke<SemanticResult[]>("semantic_search", {
           query: trimmed,
-          folder: selectedFolder,
+          folder: selectedFolder === TOP_FOLDER_ID ? null : selectedFolder,
         }),
       ]);
 
       const textResults =
         textResult.status === "fulfilled" ? textResult.value : [];
-      setResults(textResults);
+      const visibleTextResults =
+        selectedFolder === TOP_FOLDER_ID
+          ? textResults.filter((note) => note.pinned)
+          : textResults;
+      setResults(sortPinnedFirst(visibleTextResults));
 
       if (semanticResult.status === "fulfilled") {
-        const textPaths = new Set(textResults.map((r) => r.path));
+        if (selectedFolder === TOP_FOLDER_ID) {
+          setSemanticResults([]);
+          setSelectedNoteIndex(0);
+          setIsSearching(false);
+          return;
+        }
+
+        const textPaths = new Set(visibleTextResults.map((r) => r.path));
         setSemanticResults(
           semanticResult.value.filter((r) => !textPaths.has(r.path)),
         );
@@ -234,11 +258,13 @@ export default function CommandPalette() {
   useEffect(() => {
     if (selectedFolder === null) {
       setSelectedFolderIndex(0);
+    } else if (selectedFolder === TOP_FOLDER_ID) {
+      setSelectedFolderIndex(1);
     } else {
       const idx = visibleFolderStats.findIndex(
         (f) => f.name === selectedFolder,
       );
-      setSelectedFolderIndex(idx >= 0 ? idx + 1 : 0); // +1 because "All" is index 0
+      setSelectedFolderIndex(idx >= 0 ? idx + 2 : 0);
     }
   }, [selectedFolder, visibleFolderStats]);
 
@@ -283,6 +309,12 @@ export default function CommandPalette() {
   const handleSelectResult = useCallback(
     async (result: SearchResult) => {
       if (result.locked) {
+        // No unlock method on this platform yet: refuse instead of failing in
+        // the backend or letting the ciphertext open in the editor.
+        if (!capabilities.note_lock) {
+          setToast(t("command.toast.lockedUnsupported"));
+          return;
+        }
         const authed = await invoke<boolean>("is_authenticated").catch(
           () => false,
         );
@@ -295,25 +327,37 @@ export default function CommandPalette() {
       }
       await openNote(result);
     },
-    [openNote],
+    [openNote, capabilities.note_lock, t],
   );
 
   const refreshAfterChange = useCallback(async () => {
     await loadFolderStats();
 
     const notes = await invoke<NoteInfo[]>("list_notes", {
-      folder: selectedFolder,
+      folder: selectedFolder === TOP_FOLDER_ID ? null : selectedFolder,
     });
-    const recent = noteInfosToSearchResults(notes);
+    const visibleNotes =
+      selectedFolder === TOP_FOLDER_ID
+        ? notes.filter((note) => note.pinned)
+        : notes;
+    const recent = sortPinnedFirst(noteInfosToSearchResults(visibleNotes));
     setRecentNotes(recent);
 
     if (query.trim()) {
       const searchResults = await invoke<SearchResult[]>("search_notes", {
         query: query.trim(),
-        folder: selectedFolder,
+        folder: selectedFolder === TOP_FOLDER_ID ? null : selectedFolder,
       });
-      setResults(searchResults);
-      setSelectedNoteIndex((i) => Math.min(i, searchResults.length - 1));
+      const visibleSearchResults =
+        selectedFolder === TOP_FOLDER_ID
+          ? searchResults.filter((note) => note.pinned)
+          : searchResults;
+      const sortedSearchResults = sortPinnedFirst(visibleSearchResults);
+      setResults(sortedSearchResults);
+      if (selectedFolder === TOP_FOLDER_ID) {
+        setSemanticResults([]);
+      }
+      setSelectedNoteIndex((i) => Math.min(i, sortedSearchResults.length - 1));
     } else {
       setResults(recent);
       setSelectedNoteIndex((i) => Math.min(i, recent.length - 1));
@@ -511,7 +555,10 @@ export default function CommandPalette() {
     }
 
     // Default to first available folder if "All" is selected
-    const targetFolder = selectedFolder || visibleFolders[0];
+    const targetFolder =
+      selectedFolder && selectedFolder !== TOP_FOLDER_ID
+        ? selectedFolder
+        : visibleFolders[0];
     if (!targetFolder) {
       setToast(t("command.toast.createFolderFirst"));
       return;
@@ -556,6 +603,26 @@ export default function CommandPalette() {
     setFocusPane("right");
     setSelectedNoteIndex(0);
   }, []);
+
+  const handleTogglePinned = useCallback(
+    async (note: SearchResult | SemanticResult) => {
+      try {
+        const pinned = await invoke<boolean>("toggle_note_pinned", {
+          path: note.path,
+        });
+        setToast(
+          pinned
+            ? t("command.toast.notePinned")
+            : t("command.toast.noteUnpinned"),
+        );
+        await refreshAfterChange();
+      } catch (error) {
+        console.error("Failed to toggle note pin:", error);
+        setToast(translateBackendError(error, t));
+      }
+    },
+    [refreshAfterChange, t],
+  );
 
   // Keyboard handler
   useEffect(() => {
@@ -636,6 +703,7 @@ export default function CommandPalette() {
         } else if (
           e.key === "l" &&
           (e.metaKey || e.ctrlKey) &&
+          capabilities.note_lock &&
           totalItems > 0
         ) {
           e.preventDefault();
@@ -667,10 +735,25 @@ export default function CommandPalette() {
             };
             toggleLock();
           }
+        } else if (
+          e.key.toLowerCase() === "p" &&
+          (e.metaKey || e.ctrlKey) &&
+          !e.altKey &&
+          !e.shiftKey &&
+          totalItems > 0
+        ) {
+          e.preventDefault();
+          const note =
+            selectedNoteIndex < results.length
+              ? results[selectedNoteIndex]
+              : semanticResults[selectedNoteIndex - results.length];
+          if (note) {
+            handleTogglePinned(note);
+          }
         }
       } else {
         // Left pane (folder sidebar)
-        const totalFolderItems = visibleFolderStats.length + 1; // +1 for "All"
+        const totalFolderItems = visibleFolderStats.length + 2; // All + Top
 
         if (e.key === "ArrowDown") {
           e.preventDefault();
@@ -682,8 +765,10 @@ export default function CommandPalette() {
           );
           if (newIdx === 0) {
             setSelectedFolder(null);
+          } else if (newIdx === 1) {
+            setSelectedFolder(TOP_FOLDER_ID);
           } else {
-            setSelectedFolder(visibleFolderStats[newIdx - 1]?.name ?? null);
+            setSelectedFolder(visibleFolderStats[newIdx - 2]?.name ?? null);
           }
         } else if (e.key === "ArrowUp") {
           e.preventDefault();
@@ -691,15 +776,21 @@ export default function CommandPalette() {
           const newIdx = Math.max(selectedFolderIndex - 1, 0);
           if (newIdx === 0) {
             setSelectedFolder(null);
+          } else if (newIdx === 1) {
+            setSelectedFolder(TOP_FOLDER_ID);
           } else {
-            setSelectedFolder(visibleFolderStats[newIdx - 1]?.name ?? null);
+            setSelectedFolder(visibleFolderStats[newIdx - 2]?.name ?? null);
           }
         } else if (e.key === "Enter") {
           e.preventDefault();
           // Switch to right pane to browse notes in selected folder
           setFocusPane("right");
           setSelectedNoteIndex(0);
-        } else if (e.key === "Backspace" && selectedFolder) {
+        } else if (
+          e.key === "Backspace" &&
+          selectedFolder &&
+          selectedFolder !== TOP_FOLDER_ID
+        ) {
           e.preventDefault();
           setConfirmDelete({ type: "folder", folderName: selectedFolder });
         } else if (e.key === "n" && (e.metaKey || e.ctrlKey)) {
@@ -709,7 +800,8 @@ export default function CommandPalette() {
         } else if (
           e.key === "r" &&
           (e.metaKey || e.ctrlKey) &&
-          selectedFolder
+          selectedFolder &&
+          selectedFolder !== TOP_FOLDER_ID
         ) {
           e.preventDefault();
           setIsRenamingFolder(true);
@@ -737,9 +829,11 @@ export default function CommandPalette() {
     isRenamingFolder,
     isCreatingNote,
     handleSelectResult,
+    handleTogglePinned,
     refreshAfterChange,
     closePalette,
     t,
+    capabilities.note_lock,
   ]);
 
   const toggleSidebarPosition = useCallback(async () => {
@@ -797,7 +891,7 @@ export default function CommandPalette() {
             }}
             placeholder={
               selectedFolder
-                ? t("command.searchFolder", { folder: selectedFolder })
+                ? t("command.searchFolder", { folder: selectedFolderLabel })
                 : t("command.searchAll")
             }
             className="flex-1 bg-transparent text-[15px] text-ink placeholder:text-stone outline-none"
@@ -815,9 +909,11 @@ export default function CommandPalette() {
         <FolderSidebar
           folderStats={visibleFolderStats}
           totalNoteCount={totalNoteCount}
+          pinnedNoteCount={pinnedNoteCount}
           selectedFolder={selectedFolder}
           folderColors={folderColors}
           focused={focusPane === "left"}
+          topFolderId={TOP_FOLDER_ID}
           isCreating={isCreatingFolder}
           newFolderName={newFolderName}
           newFolderColor={newFolderColor}
@@ -873,7 +969,7 @@ export default function CommandPalette() {
             setIsCreatingNote(false);
             setNewNoteTitle("");
           }}
-          selectedFolder={selectedFolder}
+          selectedFolder={selectedFolder === TOP_FOLDER_ID ? null : selectedFolder}
           folders={visibleFolders}
           onDragStartNote={setDraggedNote}
           onDragEndNote={() => setDraggedNote(null)}
@@ -910,9 +1006,15 @@ export default function CommandPalette() {
             <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">⌘N</kbd>{" "}
             {t("command.footer.newNote")}
           </span>
+          {capabilities.note_lock && (
+            <span>
+              <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">⌘L</kbd>{" "}
+              {t("command.footer.lock")}
+            </span>
+          )}
           <span>
-            <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">⌘L</kbd>{" "}
-            {t("command.footer.lock")}
+            <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">⌘P</kbd>{" "}
+            {t("command.footer.pin")}
           </span>
         </div>
         <div className="flex items-center gap-3">

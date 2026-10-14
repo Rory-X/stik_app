@@ -11,6 +11,7 @@ import AppleNotesPicker from "./components/AppleNotesPicker";
 import LanguageOnboarding from "./components/LanguageOnboarding";
 import ImagePreviewWindow from "./components/ImagePreviewWindow";
 import { useTheme } from "./hooks/useTheme";
+import { usePlatformCapabilities } from "./hooks/usePlatformCapabilities";
 import type { SessionDraftSnapshot, StickedNote, StikSettings } from "@/types";
 import { isMarkdownEffectivelyEmpty } from "@/utils/normalizeMarkdownForCopy";
 import { shouldHideCaptureOnBlur } from "@/utils/blurAutoHide";
@@ -19,6 +20,7 @@ import { useI18n } from "@/i18n/react";
 
 type WindowType =
   | "postit"
+  | "capture"
   | "sticked"
   | "settings"
   | "command-palette"
@@ -27,7 +29,13 @@ type WindowType =
   | "session-draft";
 const PENDING_UPDATE_KEY = "stik_pending_update_version";
 
-function getWindowInfo(): { type: WindowType; id?: string; viewing?: boolean } {
+function getWindowInfo(): {
+  type: WindowType;
+  id?: string;
+  viewing?: boolean;
+  folder?: string;
+  autoStartDictation?: boolean;
+} {
   const params = new URLSearchParams(window.location.search);
   const windowType = params.get("window");
 
@@ -59,6 +67,14 @@ function getWindowInfo(): { type: WindowType; id?: string; viewing?: boolean } {
     return { type: "image-preview" };
   }
 
+  if (windowType === "capture") {
+    return {
+      type: "capture",
+      folder: params.get("folder") || undefined,
+      autoStartDictation: params.get("startDictation") === "1",
+    };
+  }
+
   if (windowType === "session-draft") {
     return { type: "session-draft", id: params.get("id") || undefined };
   }
@@ -69,6 +85,7 @@ function getWindowInfo(): { type: WindowType; id?: string; viewing?: boolean } {
 export default function App() {
   useTheme();
   const { t } = useI18n();
+  const capabilities = usePlatformCapabilities();
   const [currentFolder, setCurrentFolder] = useState("");
   const [stickedNote, setStickedNote] = useState<StickedNote | null>(null);
   const [sessionDraft, setSessionDraft] =
@@ -81,6 +98,9 @@ export default function App() {
   const [showAnalyticsNotice, setShowAnalyticsNotice] = useState(false);
   const [appSettings, setAppSettings] = useState<StikSettings | null>(null);
   const windowInfo = getWindowInfo();
+  const isCaptureWindow =
+    windowInfo.type === "postit" || windowInfo.type === "capture";
+  const captureRequestedFolder = windowInfo.folder;
 
   useEffect(() => {
     let cancelled = false;
@@ -117,13 +137,13 @@ export default function App() {
 
   // Initialize capture window with a valid folder (requested/default/fallback).
   useEffect(() => {
-    if (windowInfo.type !== "postit") return;
+    if (!isCaptureWindow) return;
 
     let cancelled = false;
 
     const initialize = async () => {
       try {
-        const folder = await resolveFolder();
+        const folder = await resolveFolder(captureRequestedFolder);
         if (!cancelled) {
           setCurrentFolder(folder);
         }
@@ -139,7 +159,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [windowInfo.type, resolveFolder]);
+  }, [isCaptureWindow, captureRequestedFolder, resolveFolder]);
 
   // Load sticked note data if this is a sticked window
   useEffect(() => {
@@ -213,7 +233,7 @@ export default function App() {
 
   // Hide postit on blur only when editor is empty
   useEffect(() => {
-    if (windowInfo.type !== "postit") return;
+    if (!isCaptureWindow) return;
 
     const handleFocus = () => {
       // Use Math.max so a focus event arriving after shortcut-triggered
@@ -282,11 +302,11 @@ export default function App() {
       }
       unlisten.then((fn) => fn());
     };
-  }, [windowInfo.type]);
+  }, [isCaptureWindow]);
 
   // Listen for shortcut triggers from Rust backend
   useEffect(() => {
-    if (windowInfo.type !== "postit") return;
+    if (!isCaptureWindow) return;
 
     const unlisten = listen<string>("shortcut-triggered", (event) => {
       skipNextBlurHideRef.current = true;
@@ -299,11 +319,11 @@ export default function App() {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [windowInfo.type, resolveFolder]);
+  }, [isCaptureWindow, resolveFolder]);
 
   // Keep capture folder aligned with settings updates.
   useEffect(() => {
-    if (windowInfo.type !== "postit") return;
+    if (!isCaptureWindow) return;
 
     const unlisten = listen<StikSettings>("settings-changed", (event) => {
       void resolveFolder(undefined, event.payload)
@@ -314,11 +334,11 @@ export default function App() {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [windowInfo.type, resolveFolder]);
+  }, [isCaptureWindow, resolveFolder]);
 
   // Listen for settings shortcut (Cmd+Shift+,)
   useEffect(() => {
-    if (windowInfo.type !== "postit") return;
+    if (!isCaptureWindow) return;
 
     const handleKeyDown = async (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === ",") {
@@ -333,7 +353,7 @@ export default function App() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [windowInfo.type]);
+  }, [isCaptureWindow]);
 
   // Silent auto-update on startup (postit window only, production builds)
   useEffect(() => {
@@ -494,8 +514,11 @@ export default function App() {
     return <CommandPalette />;
   }
 
-  // Render Apple Notes picker if this is that window type
+  // Render Apple Notes picker if this is that window type.
+  // On platforms without Apple Notes the window content stays empty — the
+  // entry points that open it are hidden too.
   if (windowInfo.type === "apple-notes-picker") {
+    if (!capabilities.apple_notes) return null;
     return <AppleNotesPicker />;
   }
 
@@ -609,7 +632,7 @@ export default function App() {
   }, []);
 
   if (
-    windowInfo.type === "postit" &&
+    isCaptureWindow &&
     appSettings &&
     (!appSettings.locale || !appSettings.has_completed_onboarding)
   ) {
@@ -630,6 +653,7 @@ export default function App() {
         onFolderChange={handleFolderChange}
         onOpenSettings={handleOpenSettings}
         onContentChange={handleContentChange}
+        autoStartDictation={windowInfo.autoStartDictation}
       />
       {showAnalyticsNotice && (
         <AnalyticsNotice onDismiss={handleDismissAnalyticsNotice} />
