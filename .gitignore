@@ -1,5 +1,8 @@
 # Dependencies
-node_modules/
+# No trailing slash: `node_modules/` only matches directories, so a
+# `node_modules` *symlink* (as created by git worktrees sharing an install)
+# slipped past it and got committed.
+node_modules
 
 # Build
 dist/
@@ -36,7 +39,7 @@ scripts/dev-rebuild.sh
 scripts/setup-local-cert.sh
 scripts/test-speech.sh
 
-# Agent skills (installed via npx skills add)
+# Agent skills (installed via bunx skills add)
 .agent/
 .agents/
 .claude/

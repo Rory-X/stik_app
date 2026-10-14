@@ -11,8 +11,12 @@ export default defineConfig({
     },
   },
   clearScreen: false,
+  build: {
+    manifest: true,
+  },
   server: {
-    port: 1420,
+    host: "127.0.0.1",
+    port: Number(process.env.STIK_DEV_PORT || 1420),
     strictPort: true,
     watch: {
       ignored: ["**/src-tauri/**"],
@@ -20,6 +24,9 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    include: ["src/**/*.test.ts"],
+    // .tsx as well as .ts — component tests were silently excluded by the
+    // narrower pattern and never ran.
+    include: ["src/**/*.test.{ts,tsx}"],
+    setupFiles: ["./src/test-setup.ts"],
   },
 });

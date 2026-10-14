@@ -123,7 +123,16 @@ body,
   font-family: var(--editor-font-family, inherit);
   line-height: 1.5;
   color: rgb(var(--color-ink));
-  outline: none;
+  /* Transparent rather than none: the caret and selection carry focus during
+     normal typing, but keyboard users still get a visible boundary when the
+     surface itself takes focus. */
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+}
+
+.stik-editor:focus-visible {
+  outline: 2px solid rgb(var(--color-coral));
+  outline-offset: -2px;
 }
 
 .has-formatting-toolbar .cm-editor {
@@ -426,6 +435,11 @@ body,
   color: rgb(var(--color-ink));
 }
 
+.link-popover-btn:focus-visible {
+  outline: 2px solid rgb(var(--color-coral));
+  outline-offset: 2px;
+}
+
 .link-popover-unlink:hover {
   color: rgb(var(--color-coral));
 }
@@ -463,7 +477,13 @@ body,
   width: 200px;
   max-width: 100%;
   min-width: 0;
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: 1px;
+}
+
+.link-popover-input:focus-visible {
+  outline: 2px solid rgb(var(--color-coral));
+  outline-offset: 1px;
 }
 
 .link-popover-edit-actions {
@@ -484,7 +504,7 @@ body,
 }
 
 .link-popover-save:hover {
-  background: rgba(232, 112, 95, 0.1);
+  background: rgba(var(--color-coral), 0.1);
 }
 
 /* ── Formatting Toolbar ── */
@@ -609,4 +629,26 @@ body,
 .fmt-heading-option.fmt-active {
   background: rgb(var(--color-coral-light));
   color: rgb(var(--color-coral));
+}
+
+/* Keyboard focus remains visible even when a component has not yet adopted a
+   custom ring. Component-specific focus styles may override this baseline. */
+:where(button, a[href], input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid rgb(var(--color-coral));
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }

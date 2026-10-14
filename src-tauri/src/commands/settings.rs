@@ -1,8 +1,10 @@
 use super::{git_share, versioning};
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use tauri::Manager;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShortcutMapping {
@@ -69,20 +71,11 @@ impl Default for GitSharingSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ICloudSettings {
     pub enabled: bool,
     pub migrated: bool,
-}
-
-impl Default for ICloudSettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            migrated: false,
-        }
-    }
 }
 
 pub use super::note_lock::NoteLockSettings;
@@ -132,10 +125,6 @@ pub struct StikSettings {
     pub shortcut_mappings: Vec<ShortcutMapping>,
     pub default_folder: String,
     #[serde(default)]
-    pub locale: Option<String>,
-    #[serde(default)]
-    pub has_completed_onboarding: bool,
-    #[serde(default)]
     pub git_sharing: GitSharingSettings,
     #[serde(default = "default_true")]
     pub ai_features_enabled: bool,
@@ -150,11 +139,17 @@ pub struct StikSettings {
     #[serde(default)]
     pub folder_colors: HashMap<String, String>,
     #[serde(default)]
+    pub folder_icons: HashMap<String, String>,
+    #[serde(default)]
     pub system_shortcuts: HashMap<String, String>,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub analytics_enabled: bool,
     #[serde(default)]
+    pub analytics_consent_version: u8,
+    #[serde(default)]
     pub analytics_notice_dismissed: bool,
+    #[serde(default)]
+    pub load_remote_images: bool,
     #[serde(default = "default_font_size")]
     pub font_size: u32,
     #[serde(default)]
@@ -189,14 +184,34 @@ pub struct StikSettings {
     pub note_lock: NoteLockSettings,
     #[serde(default)]
     pub use_directory_as_root: bool,
+    /// Whether the capture window was last left in Zen mode. Persisted so the
+    /// mode survives a restart rather than resetting every launch.
+    #[serde(default)]
+    pub zen_mode_enabled: bool,
+    /// Save notes as `<slug>.md` instead of `YYYYMMDD-HHMMSS-<slug>-<uuid>.md`.
+    /// Nicer in Finder; costs the date-in-name that stats and On This Day read,
+    /// which then fall back to the file's modification time.
+    #[serde(default)]
+    pub simple_filenames: bool,
     #[serde(default)]
     pub dictation: DictationSettings,
+    /// BCP-47 locale tag for the UI language ("en", "zh-CN").
+    /// Empty string means "follow the system language".
+    #[serde(default)]
+    pub language: String,
+    #[serde(default, skip_serializing)]
+    pub locale: Option<String>,
+    #[serde(default)]
+    pub has_completed_onboarding: bool,
 }
 
 impl Default for StikSettings {
     fn default() -> Self {
         Self {
             default_folder: "Inbox".to_string(),
+            language: String::new(),
+            locale: None,
+            has_completed_onboarding: false,
             shortcut_mappings: vec![
                 ShortcutMapping {
                     shortcut: "CommandOrControl+Shift+S".to_string(),
@@ -219,8 +234,6 @@ impl Default for StikSettings {
                     enabled: true,
                 },
             ],
-            locale: None,
-            has_completed_onboarding: false,
             git_sharing: GitSharingSettings::default(),
             ai_features_enabled: true,
             vim_mode_enabled: false,
@@ -228,9 +241,12 @@ impl Default for StikSettings {
             notes_directory: String::new(),
             hide_dock_icon: false,
             folder_colors: HashMap::new(),
+            folder_icons: HashMap::new(),
             system_shortcuts: default_system_shortcuts(),
-            analytics_enabled: true,
+            analytics_enabled: false,
+            analytics_consent_version: 0,
             analytics_notice_dismissed: false,
+            load_remote_images: false,
             font_size: 14,
             viewing_window_size: None,
             viewing_window_position: None,
@@ -248,6 +264,8 @@ impl Default for StikSettings {
             icloud: ICloudSettings::default(),
             note_lock: NoteLockSettings::default(),
             use_directory_as_root: false,
+            zen_mode_enabled: false,
+            simple_filenames: false,
             dictation: DictationSettings::default(),
         }
     }
@@ -259,6 +277,7 @@ pub fn default_system_shortcuts() -> HashMap<String, String> {
         ("manager".to_string(), "Cmd+Shift+M".to_string()),
         ("settings".to_string(), "Cmd+Shift+Comma".to_string()),
         ("last_note".to_string(), "Cmd+Shift+L".to_string()),
+        ("editor".to_string(), "Cmd+Shift+E".to_string()),
         ("zen_mode".to_string(), "Cmd+Period".to_string()),
         ("dictation".to_string(), "Cmd+Shift+D".to_string()),
         ("voice_note".to_string(), "Cmd+Shift+V".to_string()),
@@ -308,6 +327,15 @@ fn is_valid_chinese_script(value: &str) -> bool {
 }
 
 fn normalize_loaded_settings(mut settings: StikSettings) -> StikSettings {
+    if let Some(locale) = settings.locale.take() {
+        if settings.language.is_empty() && matches!(locale.as_str(), "en" | "zh-CN") {
+            settings.language = locale;
+        }
+    }
+    if settings.analytics_consent_version != 1 {
+        settings.analytics_enabled = false;
+    }
+
     // The UI has no enable/disable toggle — users delete shortcuts to remove them.
     // Force all visible shortcuts to enabled so stale disabled state can't persist.
     for mapping in &mut settings.shortcut_mappings {
@@ -343,23 +371,37 @@ fn normalize_loaded_settings(mut settings: StikSettings) -> StikSettings {
 }
 
 fn get_settings_path() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let stik_config = home.join(".stik");
-    fs::create_dir_all(&stik_config).map_err(|e| e.to_string())?;
-    Ok(stik_config.join("settings.json"))
+    Ok(super::paths::config_dir()?.join("settings.json"))
 }
 
 pub(crate) fn load_settings_from_file() -> Result<StikSettings, String> {
     let path = get_settings_path()?;
 
-    match versioning::load_versioned::<StikSettings>(&path)? {
-        Some(settings) => Ok(normalize_loaded_settings(settings)),
+    let mut settings = match versioning::load_versioned::<StikSettings>(&path)? {
+        Some(settings) => normalize_loaded_settings(settings),
         None => {
             let default_settings = StikSettings::default();
             save_settings_to_file(&default_settings)?;
-            Ok(default_settings)
+            default_settings
         }
+    };
+    if let Some(root) = super::paths::dev_root()? {
+        settings.notes_directory = root.join("notes").to_string_lossy().into_owned();
+        settings.use_directory_as_root = true;
+        settings.icloud.enabled = false;
+        settings.git_sharing.enabled = false;
+        settings.analytics_enabled = false;
+        settings.analytics_notice_dismissed = true;
+        settings.ai_features_enabled = false;
+        settings.auto_update_enabled = false;
+        settings.dictation.enabled = false;
+        settings.shortcut_mappings.clear();
+        settings
+            .system_shortcuts
+            .values_mut()
+            .for_each(String::clear);
     }
+    Ok(settings)
 }
 
 fn save_settings_to_file(settings: &StikSettings) -> Result<(), String> {
@@ -372,11 +414,44 @@ pub fn get_settings() -> Result<StikSettings, String> {
     load_settings_from_file()
 }
 
-#[tauri::command]
-pub fn save_settings(settings: StikSettings) -> Result<bool, String> {
+fn custom_notes_asset_root(settings: &StikSettings) -> Option<PathBuf> {
+    let directory = PathBuf::from(settings.notes_directory.trim());
+    if settings.notes_directory.trim().is_empty() || !directory.is_absolute() {
+        return None;
+    }
+
+    Some(if settings.use_directory_as_root {
+        directory
+    } else {
+        directory.join("Stik")
+    })
+}
+
+pub(crate) fn allow_custom_notes_asset_scope(
+    app: &tauri::AppHandle,
+    settings: &StikSettings,
+) -> Result<(), String> {
+    let Some(root) = custom_notes_asset_root(settings) else {
+        return Ok(());
+    };
+    fs::create_dir_all(&root)
+        .map_err(|error| format!("Failed to prepare custom notes directory: {error}"))?;
+    app.asset_protocol_scope()
+        .allow_directory(&root, true)
+        .map_err(|error| format!("Failed to authorize custom note images: {error}"))
+}
+
+pub(crate) fn save_settings_without_app(settings: StikSettings) -> Result<bool, String> {
     save_settings_to_file(&settings)?;
+    super::analytics::configure_analytics(settings.analytics_enabled)?;
     git_share::notify_force_sync();
     Ok(true)
+}
+
+#[tauri::command]
+pub fn save_settings(app: tauri::AppHandle, settings: StikSettings) -> Result<bool, String> {
+    allow_custom_notes_asset_scope(&app, &settings)?;
+    save_settings_without_app(settings)
 }
 
 #[cfg(target_os = "macos")]
@@ -563,23 +638,75 @@ pub fn export_theme_file(
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_loaded_settings, parse_color_value, ShortcutMapping, StikSettings};
+    use super::{
+        custom_notes_asset_root, default_system_shortcuts, normalize_loaded_settings,
+        normalize_system_shortcuts, parse_color_value, ShortcutMapping, StikSettings,
+    };
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    #[test]
+    fn legacy_locale_migrates_once_without_overriding_language() {
+        for (language, expected) in [("", "zh-CN"), ("en", "en")] {
+            let mut legacy = serde_json::to_value(StikSettings::default()).unwrap();
+            legacy["locale"] = serde_json::json!("zh-CN");
+            legacy["language"] = serde_json::json!(language);
+            let normalized = normalize_loaded_settings(serde_json::from_value(legacy).unwrap());
+            assert_eq!(normalized.language, expected);
+            let mut saved = serde_json::to_value(normalized).unwrap();
+            assert!(saved.get("locale").is_none());
+            saved["language"] = serde_json::json!("");
+            let system = normalize_loaded_settings(serde_json::from_value(saved).unwrap());
+            assert!(system.language.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_cleared_system_shortcut_survives_normalization() {
+        // Clearing is stored as an empty string. `or_insert_with` must leave it
+        // alone — if the default were restored, the Clear button (#92) would
+        // silently undo itself on the next settings load.
+        let mut shortcuts = default_system_shortcuts();
+        shortcuts.insert("voice_note".to_string(), String::new());
+
+        normalize_system_shortcuts(&mut shortcuts);
+
+        assert_eq!(shortcuts.get("voice_note").map(String::as_str), Some(""));
+        assert_eq!(
+            shortcuts.get("search").map(String::as_str),
+            Some("Cmd+Shift+P")
+        );
+    }
+
+    #[test]
+    fn a_missing_system_shortcut_still_gets_its_default() {
+        // Distinct from cleared: absent means "never set", not "unset by hand".
+        let mut shortcuts: HashMap<String, String> = HashMap::new();
+        normalize_system_shortcuts(&mut shortcuts);
+
+        assert_eq!(
+            shortcuts.get("voice_note").map(String::as_str),
+            Some("Cmd+Shift+V")
+        );
+    }
 
     #[test]
     fn normalization_reenables_all_disabled_shortcuts() {
-        let mut settings = StikSettings::default();
-        settings.shortcut_mappings = vec![
-            ShortcutMapping {
-                shortcut: "Cmd+Shift+S".to_string(),
-                folder: "Inbox".to_string(),
-                enabled: false,
-            },
-            ShortcutMapping {
-                shortcut: "Cmd+Shift+1".to_string(),
-                folder: "Work".to_string(),
-                enabled: false,
-            },
-        ];
+        let settings = StikSettings {
+            shortcut_mappings: vec![
+                ShortcutMapping {
+                    shortcut: "Cmd+Shift+S".to_string(),
+                    folder: "Inbox".to_string(),
+                    enabled: false,
+                },
+                ShortcutMapping {
+                    shortcut: "Cmd+Shift+1".to_string(),
+                    folder: "Work".to_string(),
+                    enabled: false,
+                },
+            ],
+            ..StikSettings::default()
+        };
 
         let normalized = normalize_loaded_settings(settings);
         assert!(normalized.shortcut_mappings[0].enabled);
@@ -588,9 +715,11 @@ mod tests {
 
     #[test]
     fn normalization_falls_back_to_legacy_theme_mode_when_active_theme_is_invalid() {
-        let mut settings = StikSettings::default();
-        settings.theme_mode = "dark".to_string();
-        settings.active_theme = "removed-custom-theme".to_string();
+        let settings = StikSettings {
+            theme_mode: "dark".to_string(),
+            active_theme: "removed-custom-theme".to_string(),
+            ..StikSettings::default()
+        };
 
         let normalized = normalize_loaded_settings(settings);
         assert_eq!(normalized.active_theme, "dark");
@@ -604,37 +733,223 @@ mod tests {
     }
 
     #[test]
-    fn default_settings_require_first_run_language_choice() {
+    fn analytics_defaults_to_no_consent() {
         let settings = StikSettings::default();
-
-        assert_eq!(settings.locale, None);
-        assert!(!settings.has_completed_onboarding);
+        assert!(!settings.analytics_enabled);
+        assert_eq!(settings.analytics_consent_version, 0);
     }
 
     #[test]
-    fn dictation_defaults_to_simplified_chinese_output() {
+    fn remote_images_are_blocked_by_default() {
         let settings = StikSettings::default();
-
-        assert_eq!(settings.dictation.chinese_script, "simplified");
+        assert!(!settings.load_remote_images);
     }
 
     #[test]
-    fn normalization_resets_invalid_dictation_chinese_script() {
+    fn custom_asset_scope_matches_the_selected_vault_layout() {
+        let mut settings = StikSettings {
+            notes_directory: "/tmp/My Notes".to_string(),
+            ..StikSettings::default()
+        };
+
+        assert_eq!(
+            custom_notes_asset_root(&settings),
+            Some(PathBuf::from("/tmp/My Notes/Stik"))
+        );
+
+        settings.use_directory_as_root = true;
+        assert_eq!(
+            custom_notes_asset_root(&settings),
+            Some(PathBuf::from("/tmp/My Notes"))
+        );
+    }
+
+    #[test]
+    fn relative_or_empty_custom_directories_never_enter_the_asset_scope() {
         let mut settings = StikSettings::default();
-        settings.dictation.chinese_script = "unsupported".to_string();
+        assert_eq!(custom_notes_asset_root(&settings), None);
+
+        settings.notes_directory = "relative/path".to_string();
+        assert_eq!(custom_notes_asset_root(&settings), None);
+    }
+
+    #[test]
+    fn legacy_analytics_state_is_reset_until_the_user_makes_a_choice() {
+        let settings = StikSettings {
+            analytics_enabled: true,
+            analytics_consent_version: 0,
+            ..StikSettings::default()
+        };
 
         let normalized = normalize_loaded_settings(settings);
 
-        assert_eq!(normalized.dictation.chinese_script, "simplified");
+        assert!(!normalized.analytics_enabled);
     }
 
     #[test]
-    fn normalization_keeps_icloud_storage_only_on_macos() {
-        let mut settings = StikSettings::default();
-        settings.icloud.enabled = true;
+    fn explicit_analytics_consent_survives_normalization() {
+        let settings = StikSettings {
+            analytics_enabled: true,
+            analytics_consent_version: 1,
+            ..StikSettings::default()
+        };
 
         let normalized = normalize_loaded_settings(settings);
 
-        assert_eq!(normalized.icloud.enabled, cfg!(target_os = "macos"));
+        assert!(normalized.analytics_enabled);
+    }
+}
+
+// ── Custom Fonts ─────────────────────────────────────────────────
+//
+// Imported fonts are copied into ~/.stik/fonts rather than referenced where the
+// user found them. A path under Downloads breaks as soon as the file moves, and
+// the asset protocol's scope does not reach outside the notes folder anyway.
+// The bytes go back to the webview as a data: URL, which avoids the asset
+// protocol and its per-platform URL scheme entirely.
+
+const FONT_EXTENSIONS: [&str; 4] = ["ttf", "otf", "woff", "woff2"];
+
+fn font_mime(ext: &str) -> &'static str {
+    match ext {
+        "otf" => "font/otf",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        _ => "font/ttf",
+    }
+}
+
+fn fonts_dir() -> Result<PathBuf, String> {
+    let dir = super::paths::config_dir()?.join("fonts");
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create fonts directory: {}", e))?;
+    Ok(dir)
+}
+
+/// Derive the CSS family name from a font file's basename.
+/// Mirrors the previous frontend behaviour so names do not change.
+pub fn font_family_name(file_name: &str) -> String {
+    let stem = file_name
+        .rsplit_once('.')
+        .map(|(s, _)| s)
+        .unwrap_or(file_name);
+    stem.replace(['-', '_'], " ")
+}
+
+fn font_extension(path: &Path) -> Result<String, String> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .ok_or("Font file has no extension")?;
+    if !FONT_EXTENSIONS.contains(&ext.as_str()) {
+        return Err(format!(
+            "Unsupported font format '.{}'. Use .ttf, .otf, .woff or .woff2",
+            ext
+        ));
+    }
+    Ok(ext)
+}
+
+#[tauri::command]
+pub fn import_font_file(path: String) -> Result<CustomFontEntry, String> {
+    let source = Path::new(&path);
+    font_extension(source)?;
+
+    let file_name = source
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("Font file has no name")?;
+
+    let destination = fonts_dir()?.join(file_name);
+    if source != destination {
+        fs::copy(source, &destination)
+            .map_err(|e| format!("Failed to copy font into ~/.stik/fonts: {}", e))?;
+    }
+
+    Ok(CustomFontEntry {
+        name: font_family_name(file_name),
+        path: destination.to_string_lossy().to_string(),
+    })
+}
+
+/// Read an imported font and return it as a `data:` URL for the FontFace API.
+#[tauri::command]
+pub fn load_font_data(path: String) -> Result<String, String> {
+    let file = Path::new(&path);
+    let ext = font_extension(file)?;
+
+    // This hands raw file bytes to the webview, so it must never read outside
+    // the fonts directory — canonicalize both sides so `..` cannot escape.
+    let canonical = file
+        .canonicalize()
+        .map_err(|e| format!("Font file not found: {}", e))?;
+    let dir = fonts_dir()?
+        .canonicalize()
+        .map_err(|e| format!("Fonts directory unavailable: {}", e))?;
+    if !canonical.starts_with(&dir) {
+        return Err("Fonts can only be loaded from ~/.stik/fonts".to_string());
+    }
+
+    let bytes = fs::read(&canonical).map_err(|e| format!("Failed to read font: {}", e))?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{};base64,{}", font_mime(&ext), encoded))
+}
+
+#[cfg(test)]
+mod font_tests {
+    use super::*;
+
+    #[test]
+    fn family_name_strips_extension_and_separators() {
+        assert_eq!(
+            font_family_name("JetBrains-Mono_Regular.ttf"),
+            "JetBrains Mono Regular"
+        );
+        assert_eq!(font_family_name("Inter.woff2"), "Inter");
+    }
+
+    #[test]
+    fn family_name_survives_a_name_with_no_extension() {
+        assert_eq!(font_family_name("PlainName"), "PlainName");
+    }
+
+    #[test]
+    fn font_extension_accepts_every_supported_format() {
+        for ext in FONT_EXTENSIONS {
+            let name = format!("Some-Font.{}", ext);
+            assert_eq!(font_extension(Path::new(&name)).unwrap(), ext);
+        }
+    }
+
+    #[test]
+    fn font_extension_is_case_insensitive() {
+        assert_eq!(font_extension(Path::new("Some.TTF")).unwrap(), "ttf");
+    }
+
+    #[test]
+    fn font_extension_rejects_a_non_font() {
+        // The picker filters, but the path also arrives from settings.json.
+        assert!(font_extension(Path::new("secrets.env")).is_err());
+        assert!(font_extension(Path::new("noextension")).is_err());
+    }
+
+    #[test]
+    fn load_font_data_refuses_paths_outside_the_fonts_directory() {
+        // Guards the arbitrary-read primitive: a font extension alone is not
+        // enough, the file has to live in ~/.stik/fonts.
+        // No extension at all.
+        let err = load_font_data("/etc/passwd".to_string()).unwrap_err();
+        assert!(err.contains("no extension"), "got: {err}");
+
+        // A real extension, but not a font one.
+        let err = load_font_data("/etc/hosts.env".to_string()).unwrap_err();
+        assert!(err.contains("Unsupported font format"), "got: {err}");
+
+        // Font extension, but outside ~/.stik/fonts — the case that matters.
+        let outside = std::env::temp_dir().join("stik-outside-fonts-dir.ttf");
+        fs::write(&outside, b"not really a font").unwrap();
+        let err = load_font_data(outside.to_string_lossy().to_string()).unwrap_err();
+        assert!(err.contains("~/.stik/fonts"), "got: {err}");
+        let _ = fs::remove_file(&outside);
     }
 }

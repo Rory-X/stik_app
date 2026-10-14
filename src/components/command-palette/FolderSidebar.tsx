@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { FolderStats } from "@/types";
 import { FOLDER_COLORS, FOLDER_COLOR_KEYS, getFolderColor } from "@/utils/folderColors";
-import { useI18n } from "@/i18n/react";
+import { useTranslation } from "@/hooks/useTranslation";
 
 interface FolderSidebarProps {
   folderStats: FolderStats[];
@@ -56,7 +56,7 @@ export default function FolderSidebar({
   draggedNoteFolder = null,
   onDropNoteOnFolder,
 }: FolderSidebarProps) {
-  const { t } = useI18n();
+  const { t } = useTranslation();
   const [dragOverFolder, setDragOverFolder] = useState<string | null>(null);
   const borderClass = position === "left" ? "border-r" : "border-l";
 
@@ -70,11 +70,11 @@ export default function FolderSidebar({
             selectedFolder === null
               ? focused
                 ? "bg-coral text-white"
-                : "bg-coral/10 text-coral"
+                : "bg-coral-light text-coral"
               : "text-ink hover:bg-line/50"
           }`}
         >
-          <span className="flex-1">{t("command.sidebar.allFolders")}</span>
+          <span className="flex-1">{t("palette.allFolders")}</span>
           <span
             className={`text-[10px] px-1.5 py-0.5 rounded ${
               selectedFolder === null
@@ -107,7 +107,7 @@ export default function FolderSidebar({
           >
             ★
           </span>
-          <span className="flex-1">Top</span>
+          <span className="flex-1">{t("command.top")}</span>
           <span
             className={`text-[10px] px-1.5 py-0.5 rounded ${
               selectedFolder === topFolderId
@@ -125,60 +125,40 @@ export default function FolderSidebar({
           const isSelected = selectedFolder === folder.name;
           const isCurrentlyRenaming = isRenaming && renamingFolder === folder.name;
           const color = getFolderColor(folder.name, folderColors);
-          const canDropNote =
-            Boolean(onDropNoteOnFolder) &&
-            Boolean(draggedNoteFolder) &&
-            draggedNoteFolder !== folder.name;
+          const canDropNote = Boolean(onDropNoteOnFolder) && Boolean(draggedNoteFolder) && draggedNoteFolder !== folder.name;
           const isDropTarget = canDropNote && dragOverFolder === folder.name;
 
           return (
             <div key={folder.name}>
-              <button
-                onClick={() => onSelectFolder(folder.name)}
-                onDragOver={(event) => {
-                  if (!canDropNote) return;
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "move";
-                  setDragOverFolder(folder.name);
-                }}
-                onDragLeave={() => {
-                  if (dragOverFolder === folder.name) {
-                    setDragOverFolder(null);
-                  }
-                }}
-                onDrop={(event) => {
-                  if (!canDropNote) return;
-                  event.preventDefault();
-                  setDragOverFolder(null);
-                  onDropNoteOnFolder?.(folder.name);
-                }}
-                className={`w-full px-3 py-2 flex items-center gap-2 text-left text-[12px] transition-colors ${
-                  isDropTarget
-                    ? "bg-coral/20 text-coral ring-1 ring-inset ring-coral/50"
-                    : isSelected
-                    ? focused
-                      ? "bg-coral text-white"
-                      : "bg-coral/10 text-coral"
-                    : "text-ink hover:bg-line/50"
-                }`}
-              >
-                <span
-                  className="text-[8px]"
-                  style={{
-                    color:
-                      isSelected && focused
-                        ? "rgba(255,255,255,0.8)"
-                        : color.dot,
-                  }}
+              {/* While renaming, the row is a plain container: an <input> nested
+                  inside a <button> is invalid HTML, and the click/key handlers
+                  here existed only to stop the button swallowing input events. */}
+              {isCurrentlyRenaming ? (
+                <div
+                  className={`w-full px-3 py-2 flex items-center gap-2 text-left text-[12px] ${
+                    isSelected
+                      ? focused
+                        ? "bg-coral text-white"
+                        : "bg-coral-light text-coral"
+                      : "text-ink"
+                  }`}
                 >
-                  ●
-                </span>
-                {isCurrentlyRenaming ? (
+                  <span
+                    className="text-[8px]"
+                    style={{
+                      color:
+                        isSelected && focused
+                          ? "rgba(255,255,255,0.8)"
+                          : color.dot,
+                    }}
+                  >
+                    ●
+                  </span>
                   <input
                     type="text"
                     value={renameValue}
+                    aria-label={t("palette.renameFolderLabel")}
                     onChange={(e) => onSetRenameValue(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
                     onKeyDown={(e) => {
                       e.stopPropagation();
                       if (e.key === "Enter") {
@@ -190,14 +170,48 @@ export default function FolderSidebar({
                       }
                     }}
                     autoFocus
-                    className="flex-1 text-[12px] font-medium bg-white/20 rounded px-1.5 py-0.5 outline-none min-w-0"
+                    className="flex-1 text-[12px] font-medium bg-white/20 rounded px-1.5 py-0.5 outline-none focus-visible:ring-2 focus-visible:ring-coral min-w-0"
                   />
-                ) : (
+                </div>
+              ) : (
+                <button
+                  onClick={() => onSelectFolder(folder.name)}
+                  onDragOver={(event) => {
+                    if (!canDropNote) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    setDragOverFolder(folder.name);
+                  }}
+                  onDragLeave={() => setDragOverFolder(null)}
+                  onDrop={(event) => {
+                    if (!canDropNote) return;
+                    event.preventDefault();
+                    setDragOverFolder(null);
+                    onDropNoteOnFolder?.(folder.name);
+                  }}
+                  style={isDropTarget ? { outline: "2px solid rgb(var(--color-coral))" } : undefined}
+                  className={`w-full px-3 py-2 flex items-center gap-2 text-left text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-coral ${
+                    isSelected
+                      ? focused
+                        ? "bg-coral text-white"
+                        : "bg-coral-light text-coral"
+                      : "text-ink hover:bg-line/50"
+                  }`}
+                >
+                  <span
+                    className="text-[8px]"
+                    style={{
+                      color:
+                        isSelected && focused
+                          ? "rgba(255,255,255,0.8)"
+                          : color.dot,
+                    }}
+                  >
+                    ●
+                  </span>
                   <span className="flex-1 font-medium truncate">
                     {folder.name}
                   </span>
-                )}
-                {!isCurrentlyRenaming && (
                   <span
                     className={`text-[10px] px-1.5 py-0.5 rounded ${
                       isSelected
@@ -209,8 +223,8 @@ export default function FolderSidebar({
                   >
                     {folder.note_count}
                   </span>
-                )}
-              </button>
+                </button>
+              )}
 
               {/* Color picker strip during rename */}
               {isCurrentlyRenaming && (
@@ -245,15 +259,16 @@ export default function FolderSidebar({
       {/* Create folder input */}
       {isCreating ? (
         <div className="border-t border-line">
-          <div className="px-3 py-2 flex items-center gap-2 bg-coral/10">
+          <div className="px-3 py-2 flex items-center gap-2 bg-coral-light">
             <span className="text-coral text-[10px]">+</span>
             <input
               type="text"
               value={newFolderName}
               onChange={(e) => onSetNewFolderName(e.target.value)}
-              placeholder={t("command.sidebar.folderName")}
+              placeholder={t("palette.folderNamePlaceholder")}
+              aria-label={t("palette.newFolderLabel")}
               autoFocus
-              className="flex-1 text-[12px] font-medium bg-transparent text-ink placeholder:text-stone outline-none min-w-0"
+              className="flex-1 text-[12px] font-medium bg-transparent text-ink placeholder:text-stone outline-none focus-visible:ring-2 focus-visible:ring-coral focus-visible:rounded-sm min-w-0"
               onKeyDown={(e) => {
                 e.stopPropagation();
                 if (e.key === "Enter") {
@@ -291,7 +306,8 @@ export default function FolderSidebar({
             onClick={() => onSetNewFolderName("")}
             className="text-[10px] text-stone hover:text-coral transition-colors"
           >
-            + {t("command.sidebar.newFolder")}
+
+            {t("palette.newFolder")}
           </button>
         </div>
       )}

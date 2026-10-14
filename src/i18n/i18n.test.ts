@@ -1,87 +1,124 @@
-import { describe, expect, it } from "vitest";
-import { createTranslator, getMissingLocaleKeys, resolveLocale } from "./index";
-import { translateBackendError } from "./errors";
+import { describe, it, expect } from "vitest";
 import { en } from "./locales/en";
 import { zhCN } from "./locales/zh-CN";
+import { LOCALES, resolveLocale, translate, isLocale } from ".";
 
-describe("i18n dictionaries", () => {
-  it("keeps Simplified Chinese and English locale keys in sync", () => {
-    expect(getMissingLocaleKeys(en, zhCN)).toEqual([]);
-    expect(getMissingLocaleKeys(zhCN, en)).toEqual([]);
+describe("locale catalogues", () => {
+  it("zh-CN covers every English key", () => {
+    const missing = Object.keys(en).filter((k) => !(k in zhCN));
+    expect(missing).toEqual([]);
   });
 
-  it("resolves unsupported or empty persisted locales to English", () => {
-    expect(resolveLocale(null)).toBe("en");
+  it("zh-CN has no keys absent from English", () => {
+    const extra = Object.keys(zhCN).filter((k) => !(k in en));
+    expect(extra).toEqual([]);
+  });
+
+  it("has no empty translations", () => {
+    const empty = Object.entries(zhCN)
+      .filter(([, v]) => v.trim() === "")
+      .map(([k]) => k);
+    expect(empty).toEqual([]);
+  });
+
+  it("keeps placeholders consistent between locales", () => {
+    const placeholders = (s: string) =>
+      (s.match(/\{(\w+)\}/g) ?? []).sort().join(",");
+    const drifted = Object.keys(en).filter(
+      (k) =>
+        placeholders(en[k as keyof typeof en]) !==
+        placeholders(zhCN[k as keyof typeof en]),
+    );
+    expect(drifted).toEqual([]);
+  });
+
+  it("has no zh-CN value left identical to English", () => {
+    // Catches strings that were added to the catalogue but never actually
+    // translated. Six theme names sat here reading as English because I had
+    // classified them as proper nouns.
+    const INTENTIONAL = new Set([
+      // key caps, printed in Latin on the physical keyboard
+      "common.enter",
+      "common.esc",
+      "common.opt",
+      "common.tab",
+      // acronym and brand name
+      "settings.tab.ai",
+      "settings.tabs.ai",
+      "app.name",
+      "onboarding.language.english",
+      "settings.language.english",
+      "social.discord",
+      "social.x",
+    ]);
+
+    const untranslated = Object.keys(en).filter(
+      (k) =>
+        !INTENTIONAL.has(k) &&
+        zhCN[k as keyof typeof en] === en[k as keyof typeof en] &&
+        /[A-Za-z]{2}/.test(en[k as keyof typeof en]),
+    );
+
+    expect(untranslated).toEqual([]);
+  });
+
+  it("registers a catalogue for every advertised locale", () => {
+    expect(LOCALES.map((l) => l.id).sort()).toEqual(["en", "zh-CN"]);
+  });
+});
+
+describe("resolveLocale", () => {
+  it("falls back to English for empty or unknown values", () => {
     expect(resolveLocale("")).toBe("en");
-    expect(resolveLocale("fr-FR")).toBe("en");
+    expect(resolveLocale(null)).toBe("en");
+    expect(resolveLocale(undefined)).toBe("en");
+    expect(resolveLocale("kl-GL")).toBe("en");
+  });
+
+  it("matches exact locale tags", () => {
     expect(resolveLocale("zh-CN")).toBe("zh-CN");
+    expect(resolveLocale("en")).toBe("en");
   });
 
-  it("translates common dialog actions and replacement text", () => {
-    const t = createTranslator("zh-CN");
-
-    expect(t("common.delete")).toBe("删除");
-    expect(t("common.unlock")).toBe("解锁");
-    expect(t("common.confirm")).toBe("确认");
-    expect(t("command.toast.openFailed", { error: "no file" })).toBe(
-      "无法打开笔记：no file",
-    );
+  it("maps Chinese variants onto zh-CN", () => {
+    expect(resolveLocale("zh")).toBe("zh-CN");
+    expect(resolveLocale("zh-Hans")).toBe("zh-CN");
+    expect(resolveLocale("zh_TW")).toBe("zh-CN");
   });
 
-  it("translates AI and dictation setup surfaces", () => {
-    const t = createTranslator("zh-CN");
+  it("matches on base language for regional English tags", () => {
+    expect(resolveLocale("en-GB")).toBe("en");
+  });
+});
 
-    expect(t("ai.rephrase")).toBe("改写");
-    expect(t("ai.settings.title")).toBe("启用 AI 功能");
-    expect(t("ai.toast.summaryApplied")).toBe("摘要已应用");
-    expect(t("dictation.setup.title")).toBe("设置语音输入");
-    expect(t("dictation.settings.models")).toBe("模型");
-    expect(t("dictation.settings.chineseScript")).toBe("中文输出");
-    expect(t("dictation.settings.chineseScript.simplified")).toBe("简体中文");
+describe("translate", () => {
+  it("returns the string for the active locale", () => {
+    expect(translate("zh-CN", "settings.title")).toBe("设置");
+    expect(translate("en", "settings.title")).toBe("Settings");
   });
 
-  it("translates main settings sections", () => {
-    const t = createTranslator("zh-CN");
-
-    expect(t("settings.appearance.createCustomTheme")).toBe("创建自定义主题");
-    expect(t("settings.templates.addTemplate")).toBe("添加模板");
-    expect(t("settings.shortcuts.systemShortcuts")).toBe("系统快捷键");
-    expect(t("settings.folders.notesDirectory")).toBe("笔记目录");
-    expect(t("settings.editor.fontSize")).toBe("字体大小");
-    expect(t("settings.git.enable")).toBe("启用 Git 共享");
-    expect(t("settings.insights.captureStreak")).toBe("连续记录");
+  it("substitutes named placeholders", () => {
+    // An unknown key falls back to the key itself as the template, which
+    // gives us a stable interpolation fixture that no catalogue reword
+    // can break.
+    const template = "{count} of {total}" as keyof typeof en;
+    expect(translate("en", template, { count: 3, total: 9 })).toBe("3 of 9");
   });
 
-  it("translates common backend errors for Chinese UI", () => {
-    const t = createTranslator("zh-CN");
+  it("falls back to English when a locale lacks the key", () => {
+    const orphan = "definitely.not.a.real.key" as keyof typeof en;
+    expect(translate("zh-CN", orphan)).toBe(orphan);
+  });
 
-    expect(translateBackendError("Folder does not exist", t)).toBe(
-      "文件夹不存在",
-    );
-    expect(
-      translateBackendError(
-        "Failed to delete note: Operation not permitted",
-        t,
-      ),
-    ).toBe("删除笔记失败：Operation not permitted");
-    expect(translateBackendError("DarwinKit sidecar not running", t)).toBe(
-      "DarwinKit 后台服务未运行",
-    );
-    expect(
-      translateBackendError("Remote URL is required for Git sharing", t),
-    ).toBe("Git 共享需要远程 URL");
-    expect(translateBackendError("Not authenticated", t)).toBe("尚未认证");
-    expect(
-      translateBackendError("Failed to query notes: database is locked", t),
-    ).toBe("查询 Apple Notes 失败：database is locked");
-    expect(
-      translateBackendError("Invalid JSON theme file: expected value", t),
-    ).toBe("JSON 主题文件无效：expected value");
-    expect(
-      translateBackendError("Clipboard unavailable: denied", t),
-    ).toBe("剪贴板不可用：denied");
-    expect(translateBackendError("Operation not permitted (os error 1)", t)).toBe(
-      "没有操作权限",
-    );
+  it("leaves unknown placeholders untouched", () => {
+    expect(translate("en", "common.cancel", { unused: "x" })).toBe("cancel");
+  });
+});
+
+describe("isLocale", () => {
+  it("accepts supported ids and rejects others", () => {
+    expect(isLocale("zh-CN")).toBe(true);
+    expect(isLocale("en")).toBe(true);
+    expect(isLocale("fr")).toBe(false);
   });
 });

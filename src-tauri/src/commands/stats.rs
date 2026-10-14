@@ -56,7 +56,10 @@ pub fn get_capture_streak() -> Result<CaptureStreakStatus, String> {
     let current_settings = settings::get_settings().unwrap_or_default();
     Ok(CaptureStreakStatus {
         days,
-        label: format_capture_streak_label_for_locale(days, current_settings.locale.as_deref()),
+        label: format_capture_streak_label_for_locale(
+            days,
+            Some(current_settings.language.as_str()),
+        ),
     })
 }
 
@@ -75,12 +78,13 @@ fn collect_note_dates() -> Result<Vec<NaiveDate>, String> {
         if let Ok(entries) = fs::read_dir(folder) {
             for entry in entries.filter_map(|e| e.ok()) {
                 let path = entry.path();
-                if !path.extension().is_some_and(|ext| ext == "md") {
+                if path.extension().is_none_or(|ext| ext != "md") {
                     continue;
                 }
 
                 if let Some(filename) = path.file_name().and_then(|name| name.to_str()) {
-                    if let Some(date) = parse_date_from_filename(filename) {
+                    // Simple filenames carry no date, so fall back to mtime.
+                    if let Some(date) = super::notes::note_date(&path, filename) {
                         dates.push(date);
                     }
                 }
@@ -92,24 +96,13 @@ fn collect_note_dates() -> Result<Vec<NaiveDate>, String> {
 }
 
 fn get_stats_path() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let stik_config = home.join(".stik");
-    fs::create_dir_all(&stik_config).map_err(|e| e.to_string())?;
+    let stik_config = super::paths::config_dir()?;
     Ok(stik_config.join("stats.json"))
 }
 
 fn save_stats_to_file(stats: &CaptureStats) -> Result<(), String> {
     let path = get_stats_path()?;
     versioning::save_versioned(&path, stats)
-}
-
-fn parse_date_from_filename(filename: &str) -> Option<NaiveDate> {
-    let date_segment = filename.split('-').next()?;
-    if date_segment.len() != 8 {
-        return None;
-    }
-
-    NaiveDate::parse_from_str(date_segment, "%Y%m%d").ok()
 }
 
 fn compute_capture_streak_from_dates(dates: &[NaiveDate], today: NaiveDate) -> u32 {
@@ -145,7 +138,10 @@ mod tests {
 
     #[test]
     fn parses_date_from_filename_prefix() {
-        let date = parse_date_from_filename("20260206-101530-my-note.md");
+        let date = super::super::notes::note_date(
+            std::path::Path::new("/nonexistent/20260206-101530-my-note.md"),
+            "20260206-101530-my-note.md",
+        );
         assert_eq!(date, NaiveDate::from_ymd_opt(2026, 2, 6));
     }
 

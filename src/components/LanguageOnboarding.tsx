@@ -4,6 +4,7 @@ import { emit } from "@tauri-apps/api/event";
 import type { Locale } from "@/i18n";
 import { createTranslator } from "@/i18n";
 import type { StikSettings } from "@/types";
+import { useAppQuit } from "@/hooks/useAppQuit";
 
 interface LanguageOnboardingProps {
   settings: StikSettings;
@@ -17,6 +18,9 @@ export default function LanguageOnboarding({
   const [selectedLocale, setSelectedLocale] = useState<Locale>("zh-CN");
   const [isSaving, setIsSaving] = useState(false);
   const t = useMemo(() => createTranslator(selectedLocale), [selectedLocale]);
+  useAppQuit(async () => {}, (error) => {
+    console.error("Failed to coordinate language setup shutdown:", error);
+  });
 
   const saveLanguage = async () => {
     setIsSaving(true);
@@ -24,6 +28,7 @@ export default function LanguageOnboarding({
       const nextSettings: StikSettings = {
         ...settings,
         locale: selectedLocale,
+        language: selectedLocale,
         has_completed_onboarding: true,
       };
       await invoke("save_settings", { settings: nextSettings });
@@ -39,7 +44,7 @@ export default function LanguageOnboarding({
       <div className="h-full flex flex-col justify-center p-6">
         <div className="mb-5">
           <p className="text-[11px] uppercase tracking-[0.16em] text-coral font-semibold mb-2">
-            Stik
+            {t("app.name")}
           </p>
           <h1 className="text-[22px] font-semibold leading-tight">
             {t("onboarding.language.title")}

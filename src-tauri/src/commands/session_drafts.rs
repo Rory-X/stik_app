@@ -1,3 +1,7 @@
+use std::sync::Mutex;
+
+static STORE_LOCK: Mutex<()> = Mutex::new(());
+
 use super::versioning;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -47,8 +51,7 @@ pub struct SessionDraftStore {
 }
 
 fn get_session_drafts_path() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let stik_config = home.join(".stik");
+    let stik_config = super::paths::config_dir()?;
     fs::create_dir_all(&stik_config).map_err(|e| e.to_string())?;
     Ok(stik_config.join("session_drafts.json"))
 }
@@ -88,6 +91,7 @@ pub fn get_session_draft(id: String) -> Result<SessionDraftSnapshot, String> {
 
 #[tauri::command]
 pub fn upsert_session_draft(draft: SessionDraftSnapshot) -> Result<SessionDraftSnapshot, String> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     let mut store = load_session_draft_store()?;
 
     if let Some(existing) = store.drafts.iter_mut().find(|item| item.id == draft.id) {
@@ -102,6 +106,7 @@ pub fn upsert_session_draft(draft: SessionDraftSnapshot) -> Result<SessionDraftS
 
 #[tauri::command]
 pub fn delete_session_draft(id: String) -> Result<bool, String> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     let mut store = load_session_draft_store()?;
     let before = store.drafts.len();
     store.drafts.retain(|draft| draft.id != id);

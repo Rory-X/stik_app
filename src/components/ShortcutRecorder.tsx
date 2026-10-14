@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { useI18n } from "@/i18n/react";
+import { useTranslation } from "@/hooks/useTranslation";
 
 interface ShortcutRecorderProps {
   value: string;
@@ -184,7 +184,7 @@ export default function ShortcutRecorder({
   reservedShortcuts = [],
   existingShortcuts = [],
 }: ShortcutRecorderProps) {
-  const { t } = useI18n();
+  const { t } = useTranslation();
   const [isRecording, setIsRecording] = useState(false);
   const [tempShortcut, setTempShortcut] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: "info" | "error" | "success" } | null>(null);
@@ -233,7 +233,7 @@ export default function ShortcutRecorder({
       if (!shortcut) {
         // Show hint if user pressed a key without modifiers
         if (!["Meta", "Control", "Alt", "Shift"].includes(e.key)) {
-          showToast(t("shortcut.holdModifierHint"), "info");
+          showToast(t("settings.shortcut.holdModifier"), "info");
         }
         return;
       }
@@ -242,7 +242,7 @@ export default function ShortcutRecorder({
       if (reservedShortcuts.includes(shortcut)) {
         pendingShortcutRef.current = shortcut;
         hasErrorRef.current = true;
-        showToast(t("shortcut.reserved"), "error");
+        showToast(t("settings.shortcut.reserved"), "error");
         setTempShortcut(shortcut);
         return;
       }
@@ -251,7 +251,7 @@ export default function ShortcutRecorder({
       if (existingShortcuts.includes(shortcut) && shortcut !== value) {
         pendingShortcutRef.current = shortcut;
         hasErrorRef.current = true;
-        showToast(t("shortcut.alreadyInUse"), "error");
+        showToast(t("settings.shortcut.inUse"), "error");
         setTempShortcut(shortcut);
         return;
       }
@@ -268,12 +268,7 @@ export default function ShortcutRecorder({
       // Commit the shortcut when all keys are released
       if (pendingShortcutRef.current && !hasErrorRef.current) {
         onChange(pendingShortcutRef.current);
-        showToast(
-          t("shortcut.setTo", {
-            shortcut: formatShortcutDisplay(pendingShortcutRef.current),
-          }),
-          "success",
-        );
+        showToast(`Shortcut set to ${formatShortcutDisplay(pendingShortcutRef.current)}`, "success");
         pendingShortcutRef.current = null;
         setIsRecording(false);
         setTempShortcut(null);
@@ -288,7 +283,7 @@ export default function ShortcutRecorder({
       window.removeEventListener("keydown", handleKeyDown, true);
       window.removeEventListener("keyup", handleKeyUp, true);
     };
-  }, [value, onChange, reservedShortcuts, existingShortcuts, showToast, t]);
+  }, [value, onChange, reservedShortcuts, existingShortcuts, showToast]);
 
   // Click outside to cancel
   useEffect(() => {
@@ -318,8 +313,10 @@ export default function ShortcutRecorder({
   const displayValue = isRecording
     ? tempShortcut
       ? formatShortcutDisplay(tempShortcut)
-      : t("shortcut.pressKeys")
-    : formatShortcutDisplay(value);
+      : t("settings.shortcut.pressKeys")
+    : value === ""
+      ? t("settings.shortcut.notSet")
+      : formatShortcutDisplay(value);
 
   return (
     <>
@@ -332,32 +329,37 @@ export default function ShortcutRecorder({
           }}
           className={`w-full px-3 py-2.5 rounded-lg text-[13px] text-left flex items-center justify-between transition-all ${
             isRecording
-              ? "bg-coral/10 border-2 border-coral text-coral"
+              ? "bg-coral-light border-2 border-coral text-coral"
               : "bg-bg border border-line text-ink hover:border-coral/50"
           }`}
         >
           <span className={`font-mono ${isRecording && !tempShortcut ? "text-stone animate-pulse" : ""}`}>
             {displayValue}
           </span>
-          {isRecording ? (
-            <span
-              className="text-[9px] text-stone hover:text-coral cursor-pointer transition-colors"
-              onClick={(e) => {
-                e.stopPropagation();
-                pendingShortcutRef.current = null;
-                hasErrorRef.current = false;
-                setIsRecording(false);
-                setTempShortcut(null);
-              }}
-            >
-              {t("common.cancelShortcut")}
-            </span>
-          ) : (
+          {!isRecording && (
             <span className="text-[9px] text-stone">
-              {t("shortcut.clickToRecord")}
+              {t("settings.shortcut.clickToRecord")}
             </span>
           )}
         </button>
+
+        {/* Sibling, not a child: a <button> inside a <button> is invalid HTML
+            and the browser drops the inner one from the tab order. */}
+        {isRecording && (
+          <button
+            type="button"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-[9px] text-stone hover:text-coral transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral rounded px-1"
+            onClick={(e) => {
+              e.stopPropagation();
+              pendingShortcutRef.current = null;
+              hasErrorRef.current = false;
+              setIsRecording(false);
+              setTempShortcut(null);
+            }}
+          >
+            {t("common.cancelLower")}
+          </button>
+        )}
       </div>
 
       {/* Toast notification */}

@@ -106,7 +106,7 @@ export interface NoteLockSettings {
 export interface StikSettings {
   shortcut_mappings: ShortcutMapping[];
   default_folder: string;
-  locale: "en" | "zh-CN" | null;
+  locale?: "en" | "zh-CN" | null;
   has_completed_onboarding: boolean;
   git_sharing: GitSharingSettings;
   ai_features_enabled: boolean;
@@ -115,9 +115,12 @@ export interface StikSettings {
   notes_directory: string;
   hide_dock_icon: boolean;
   folder_colors: Record<string, string>;
+  folder_icons: Record<string, string>;
   system_shortcuts: Record<string, string>;
   analytics_enabled: boolean;
+  analytics_consent_version: number;
   analytics_notice_dismissed: boolean;
+  load_remote_images: boolean;
   font_size: number;
   custom_templates: CustomTemplate[];
   sidebar_position: string;
@@ -133,7 +136,11 @@ export interface StikSettings {
   icloud: ICloudSettings;
   note_lock: NoteLockSettings;
   use_directory_as_root?: boolean;
+  zen_mode_enabled?: boolean;
+  simple_filenames?: boolean;
   dictation?: DictationSettings;
+  /// BCP-47 locale tag for the UI language. "" = follow system language.
+  language?: string;
 }
 
 export type ChineseScriptPreference =
@@ -180,6 +187,14 @@ export interface NoteInfo {
   pinned_at?: string | null;
 }
 
+export interface TrashedNote {
+  id: string;
+  original_relative_path: string;
+  filename: string;
+  folder: string;
+  deleted_at: string;
+}
+
 export interface SearchResult {
   path: string;
   filename: string;
@@ -205,6 +220,27 @@ export interface SemanticResult {
 export interface FolderStats {
   name: string;
   note_count: number;
+  total_note_count?: number;
+}
+
+export interface VaultHealthIssue {
+  code: string;
+  severity: "warning" | "error";
+  message: string;
+  suggestion: string;
+}
+
+export interface VaultHealthReport {
+  status: "healthy" | "warning" | "error";
+  storageMode: "local" | "icloud" | "custom";
+  rootPath: string | null;
+  rootExists: boolean;
+  rootIsDirectory: boolean;
+  rootWritable: boolean;
+  indexedNoteCount: number;
+  diskNoteCount: number | null;
+  checkedAt: string;
+  issues: VaultHealthIssue[];
 }
 
 export interface CaptureStreakStatus {

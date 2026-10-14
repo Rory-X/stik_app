@@ -1,7 +1,3 @@
-// Apple Notes import reads the Notes SQLite store and decodes Apple's
-// protobuf note format. Both are macOS-only, so every implementation detail
-// below is gated; the four Tauri commands at the bottom exist on all
-// platforms so `generate_handler!` never needs a cfg.
 #[cfg(target_os = "macos")]
 use flate2::read::GzDecoder;
 #[cfg(target_os = "macos")]
@@ -48,16 +44,23 @@ fn notes_db_path() -> String {
 
 #[cfg(target_os = "macos")]
 fn open_readonly_connection() -> Result<Connection, String> {
+    if super::paths::dev_root()?.is_some() {
+        return Err("Apple Notes import is unavailable in the isolated development profile".into());
+    }
     let path = notes_db_path();
+    open_readonly_database(std::path::Path::new(&path))
+}
+
+#[cfg(target_os = "macos")]
+fn open_readonly_database(path: &std::path::Path) -> Result<Connection, String> {
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
 
-    let conn = Connection::open_with_flags(&path, flags).map_err(|e| {
+    let conn = Connection::open_with_flags(path, flags).map_err(|e| {
         let msg = e.to_string();
         if msg.contains("unable to open") || msg.contains("permission") || msg.contains("denied") {
-            format!(
-                "FULL_DISK_ACCESS_REQUIRED: Stik needs Full Disk Access to read Apple Notes. \
-                 Go to System Settings → Privacy & Security → Full Disk Access, then add Stik."
-            )
+            "FULL_DISK_ACCESS_REQUIRED: Stik needs Full Disk Access to read Apple Notes. \
+             Go to System Settings → Privacy & Security → Full Disk Access, then add Stik."
+                .to_string()
         } else {
             format!("Failed to open Apple Notes database: {}", msg)
         }
@@ -109,7 +112,12 @@ fn detect_account_column(conn: &Connection) -> &'static str {
 #[cfg(target_os = "macos")]
 fn list_apple_notes_inner() -> Result<Vec<AppleNoteEntry>, String> {
     let conn = open_readonly_connection()?;
-    let account_col = detect_account_column(&conn);
+    list_notes_from_connection(&conn)
+}
+
+#[cfg(target_os = "macos")]
+fn list_notes_from_connection(conn: &Connection) -> Result<Vec<AppleNoteEntry>, String> {
+    let account_col = detect_account_column(conn);
 
     let query = format!(
         "SELECT
@@ -168,7 +176,11 @@ fn list_apple_notes_inner() -> Result<Vec<AppleNoteEntry>, String> {
 #[cfg(target_os = "macos")]
 pub fn import_apple_note_inner(note_id: i64) -> Result<String, String> {
     let conn = open_readonly_connection()?;
+    import_note_from_connection(&conn, note_id)
+}
 
+#[cfg(target_os = "macos")]
+fn import_note_from_connection(conn: &Connection, note_id: i64) -> Result<String, String> {
     let compressed: Vec<u8> = conn
         .query_row(
             "SELECT nd.ZDATA
@@ -186,8 +198,13 @@ pub fn import_apple_note_inner(note_id: i64) -> Result<String, String> {
             }
         })?;
 
-    // Decompress gzip
-    let mut decoder = GzDecoder::new(&compressed[..]);
+    decode_apple_note_data(&compressed)
+}
+
+#[cfg(target_os = "macos")]
+fn decode_apple_note_data(compressed: &[u8]) -> Result<String, String> {
+    // Keep the wire-format boundary independent of access to the user's database.
+    let mut decoder = GzDecoder::new(compressed);
     let mut decompressed = Vec::new();
     decoder
         .read_to_end(&mut decompressed)
@@ -352,7 +369,12 @@ fn protobuf_to_markdown(note: &proto::Note) -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn apply_inline_formatting(text: &str, font_weight: i32, strikethrough: i32, link: Option<&str>) -> String {
+fn apply_inline_formatting(
+    text: &str,
+    font_weight: i32,
+    strikethrough: i32,
+    link: Option<&str>,
+) -> String {
     if text.is_empty() {
         return String::new();
     }
@@ -361,9 +383,9 @@ fn apply_inline_formatting(text: &str, font_weight: i32, strikethrough: i32, lin
 
     // Apply formatting wrappers
     match font_weight {
-        1 => result = format!("**{}**", result),     // bold
-        2 => result = format!("*{}*", result),        // italic
-        3 => result = format!("***{}***", result),    // bold + italic
+        1 => result = format!("**{}**", result),   // bold
+        2 => result = format!("*{}*", result),     // italic
+        3 => result = format!("***{}***", result), // bold + italic
         _ => {}
     }
 
@@ -448,6 +470,103 @@ pub fn check_apple_notes_access() -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
+
+    // Synthetic proto2 bytes encoded by protoc, gzipped and frozen before the
+    // prost/flate2 upgrade. No personal Apple Notes data or new-version encoder.
+    const LEGACY_COMPRESSED_NOTE: &str =
+        "H4sIAAAAAAAAExNSkVISEvNJTU9MrlRITkw7vJLLKT8nRaEktaJEi4mDR4uFg1ODEQCSqQAfJgAAAA==";
+
+    #[test]
+    fn readonly_database_lists_and_imports_supported_schemas() {
+        for account_column in ["ZACCOUNT2", "ZACCOUNT3", "ZACCOUNT4", "ZACCOUNT7"] {
+            let path = std::env::temp_dir()
+                .join(format!("stik-apple-notes-{}.sqlite", uuid::Uuid::new_v4()));
+            let fixture = Connection::open(&path).unwrap();
+            fixture
+                .execute_batch(&format!(
+                    "CREATE TABLE ZICCLOUDSYNCINGOBJECT (
+                        Z_PK INTEGER PRIMARY KEY, ZTITLE1 TEXT, ZTITLE2 TEXT,
+                        ZSNIPPET TEXT, ZMODIFICATIONDATE1 REAL, {account_column} INTEGER,
+                        ZFOLDER INTEGER, ZNAME TEXT, ZMARKEDFORDELETION INTEGER,
+                        ZNOTEDATA INTEGER);
+                     CREATE TABLE ZICNOTEDATA (Z_PK INTEGER PRIMARY KEY, ZDATA BLOB);
+                     INSERT INTO ZICCLOUDSYNCINGOBJECT (Z_PK, ZTITLE2) VALUES (100, 'Work');
+                     INSERT INTO ZICCLOUDSYNCINGOBJECT (Z_PK, ZNAME) VALUES (200, 'Test account');
+                     INSERT INTO ZICCLOUDSYNCINGOBJECT
+                         (Z_PK, ZTITLE1, ZSNIPPET, ZMODIFICATIONDATE1, {account_column}, ZFOLDER, ZNOTEDATA)
+                         VALUES (1, 'Café', 'Preview', 20, 200, 100, 300),
+                                (2, 'Local note', NULL, 10, NULL, NULL, NULL);
+                     INSERT INTO ZICCLOUDSYNCINGOBJECT
+                         (Z_PK, ZTITLE1, ZMODIFICATIONDATE1, ZMARKEDFORDELETION)
+                         VALUES (3, 'Deleted', 30, 1);"
+                ))
+                .unwrap();
+            let compressed = base64::engine::general_purpose::STANDARD
+                .decode(LEGACY_COMPRESSED_NOTE)
+                .unwrap();
+            fixture
+                .execute("INSERT INTO ZICNOTEDATA VALUES (300, ?1)", [&compressed])
+                .unwrap();
+            fixture.close().unwrap();
+
+            let connection = open_readonly_database(&path).unwrap();
+            let notes = list_notes_from_connection(&connection).unwrap();
+            assert_eq!(
+                notes.iter().map(|note| note.note_id).collect::<Vec<_>>(),
+                [1, 2]
+            );
+            assert_eq!(notes[0].title, "Café");
+            assert_eq!(notes[0].snippet, "Preview");
+            assert_eq!(notes[0].folder_name, "Work");
+            assert_eq!(notes[0].account_name, "Test account");
+            assert_eq!(notes[0].modified_date, "2001-01-01T00:00:20Z");
+            assert_eq!(notes[1].snippet, "");
+            assert_eq!(notes[1].folder_name, "Notes");
+            assert_eq!(notes[1].account_name, "Local");
+            assert_eq!(
+                import_note_from_connection(&connection, 1).unwrap(),
+                "Legacy café\n**Bold text**"
+            );
+            assert_eq!(
+                import_note_from_connection(&connection, 999).unwrap_err(),
+                "Note 999 not found or has no data"
+            );
+            assert!(connection
+                .execute("DELETE FROM ZICCLOUDSYNCINGOBJECT", [])
+                .is_err());
+            connection.close().unwrap();
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn legacy_compressed_note_preserves_text_and_formatting() {
+        let compressed = base64::engine::general_purpose::STANDARD
+            .decode(LEGACY_COMPRESSED_NOTE)
+            .unwrap();
+        assert_eq!(
+            decode_apple_note_data(&compressed).unwrap(),
+            "Legacy café\n**Bold text**"
+        );
+        assert!(decode_apple_note_data(&compressed[..compressed.len() - 8])
+            .unwrap_err()
+            .starts_with("Failed to decompress note data:"));
+    }
+
+    #[test]
+    fn malformed_compressed_notes_report_the_failing_stage() {
+        assert!(decode_apple_note_data(b"not gzip")
+            .unwrap_err()
+            .starts_with("Failed to decompress note data:"));
+        // A valid gzip stream whose payload is the invalid protobuf byte 0xff.
+        let invalid_proto = [
+            31, 139, 8, 0, 0, 0, 0, 0, 0, 19, 251, 15, 0, 0, 0, 0, 255, 1, 0, 0, 0,
+        ];
+        assert!(decode_apple_note_data(&invalid_proto)
+            .unwrap_err()
+            .starts_with("Failed to decode protobuf:"));
+    }
 
     fn make_note(text: &str, runs: Vec<proto::AttributeRun>) -> proto::Note {
         proto::Note {
@@ -525,8 +644,8 @@ mod tests {
         let note = make_note(
             "My Title\nSome body text",
             vec![
-                styled_run(9, 0),   // "My Title\n" (title)
-                simple_run(14),      // "Some body text"
+                styled_run(9, 0), // "My Title\n" (title)
+                simple_run(14),   // "Some body text"
             ],
         );
         let md = protobuf_to_markdown(&note);
@@ -539,9 +658,9 @@ mod tests {
         let note = make_note(
             "Title\nHeading\nSubheading\n",
             vec![
-                styled_run(6, 0),   // "Title\n"
-                styled_run(8, 1),   // "Heading\n"
-                styled_run(11, 2),  // "Subheading\n"
+                styled_run(6, 0),  // "Title\n"
+                styled_run(8, 1),  // "Heading\n"
+                styled_run(11, 2), // "Subheading\n"
             ],
         );
         let md = protobuf_to_markdown(&note);
@@ -554,8 +673,8 @@ mod tests {
         let note = make_note(
             "Item one\nItem two\n",
             vec![
-                styled_run(9, 100),  // "Item one\n"
-                styled_run(9, 100),  // "Item two\n"
+                styled_run(9, 100), // "Item one\n"
+                styled_run(9, 100), // "Item two\n"
             ],
         );
         let md = protobuf_to_markdown(&note);
@@ -568,8 +687,8 @@ mod tests {
         let note = make_note(
             "First\nSecond\n",
             vec![
-                styled_run(6, 102),  // "First\n"
-                styled_run(7, 102),  // "Second\n"
+                styled_run(6, 102), // "First\n"
+                styled_run(7, 102), // "Second\n"
             ],
         );
         let md = protobuf_to_markdown(&note);
@@ -582,8 +701,8 @@ mod tests {
         let note = make_note(
             "Done task\nOpen task\n",
             vec![
-                checklist_run(10, true),   // "Done task\n"
-                checklist_run(10, false),  // "Open task\n"
+                checklist_run(10, true),  // "Done task\n"
+                checklist_run(10, false), // "Open task\n"
             ],
         );
         let md = protobuf_to_markdown(&note);
@@ -593,38 +712,50 @@ mod tests {
 
     #[test]
     fn bold_and_italic() {
-        let note = make_note("bold text", vec![{
-            let mut run = simple_run(9);
-            run.font_weight = Some(1);
-            run
-        }]);
+        let note = make_note(
+            "bold text",
+            vec![{
+                let mut run = simple_run(9);
+                run.font_weight = Some(1);
+                run
+            }],
+        );
         assert_eq!(protobuf_to_markdown(&note), "**bold text**");
 
-        let note = make_note("italic text", vec![{
-            let mut run = simple_run(11);
-            run.font_weight = Some(2);
-            run
-        }]);
+        let note = make_note(
+            "italic text",
+            vec![{
+                let mut run = simple_run(11);
+                run.font_weight = Some(2);
+                run
+            }],
+        );
         assert_eq!(protobuf_to_markdown(&note), "*italic text*");
     }
 
     #[test]
     fn strikethrough() {
-        let note = make_note("deleted", vec![{
-            let mut run = simple_run(7);
-            run.strikethrough = Some(1);
-            run
-        }]);
+        let note = make_note(
+            "deleted",
+            vec![{
+                let mut run = simple_run(7);
+                run.strikethrough = Some(1);
+                run
+            }],
+        );
         assert_eq!(protobuf_to_markdown(&note), "~~deleted~~");
     }
 
     #[test]
     fn link_formatting() {
-        let note = make_note("click here", vec![{
-            let mut run = simple_run(10);
-            run.link = Some("https://example.com".to_string());
-            run
-        }]);
+        let note = make_note(
+            "click here",
+            vec![{
+                let mut run = simple_run(10);
+                run.link = Some("https://example.com".to_string());
+                run
+            }],
+        );
         assert_eq!(
             protobuf_to_markdown(&note),
             "[click here](https://example.com)"
@@ -636,9 +767,9 @@ mod tests {
         let note = make_note(
             "Title\nlet x = 1\nlet y = 2\n",
             vec![
-                styled_run(6, 0),   // "Title\n"
-                styled_run(10, 4),  // "let x = 1\n"
-                styled_run(10, 4),  // "let y = 2\n"
+                styled_run(6, 0),  // "Title\n"
+                styled_run(10, 4), // "let x = 1\n"
+                styled_run(10, 4), // "let y = 2\n"
             ],
         );
         let md = protobuf_to_markdown(&note);
@@ -648,25 +779,28 @@ mod tests {
 
     #[test]
     fn indented_list() {
-        let note = make_note("Sub item\n", vec![{
-            proto::AttributeRun {
-                length: Some(9),
-                paragraph_style: Some(proto::ParagraphStyle {
-                    style_type: Some(100),
-                    alignment: None,
-                    indent_amount: Some(1),
-                    checklist: None,
-                }),
-                font: None,
-                font_weight: None,
-                underlined: None,
-                strikethrough: None,
-                superscript: None,
-                link: None,
-                color: None,
-                attachment_info: None,
-            }
-        }]);
+        let note = make_note(
+            "Sub item\n",
+            vec![{
+                proto::AttributeRun {
+                    length: Some(9),
+                    paragraph_style: Some(proto::ParagraphStyle {
+                        style_type: Some(100),
+                        alignment: None,
+                        indent_amount: Some(1),
+                        checklist: None,
+                    }),
+                    font: None,
+                    font_weight: None,
+                    underlined: None,
+                    strikethrough: None,
+                    superscript: None,
+                    link: None,
+                    color: None,
+                    attachment_info: None,
+                }
+            }],
+        );
         let md = protobuf_to_markdown(&note);
         assert!(md.contains("  - Sub item"));
     }

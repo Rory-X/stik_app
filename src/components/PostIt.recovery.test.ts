@@ -16,6 +16,7 @@ const tauriMocks = vi.hoisted(() => ({
   onMoved: vi.fn(() => Promise.resolve(() => {})),
   onResized: vi.fn(() => Promise.resolve(() => {})),
   emit: vi.fn(() => Promise.resolve()),
+  setCursor: vi.fn(),
 }));
 
 vi.mock("@codemirror/autocomplete", () => ({
@@ -91,7 +92,7 @@ vi.mock("./Editor", async () => {
           props.onChange?.(next);
         },
         moveToEnd: vi.fn(),
-        setCursor: vi.fn(),
+        setCursor: tauriMocks.setCursor,
         setVimMode: vi.fn(),
         getView: () => ({
           state: {
@@ -200,6 +201,15 @@ async function renderRecoveredDraft(overrides: Partial<React.ComponentProps<type
 }
 
 describe("PostIt recovered session drafts", () => {
+  it("restores the cursor from the recovered snapshot", async () => {
+    await renderRecoveredDraft({ sessionDraftCursor: { head: 4, anchor: 2 } });
+    await act(async () => {
+      vi.advanceTimersByTime(100);
+      await Promise.resolve();
+    });
+    expect(tauriMocks.setCursor).toHaveBeenCalledWith(4, 2);
+  });
+
   it("keeps the normal window chrome and save/drag interactions", async () => {
     const onSave = vi.fn(() => Promise.resolve("/tmp/Stik/Inbox/recovered.md"));
     const onClose = vi.fn(() => Promise.resolve());

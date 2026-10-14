@@ -5,7 +5,7 @@ import {
   normalizeNoteSnippet,
 } from "@/utils/notePresentation";
 import { getFolderColor } from "@/utils/folderColors";
-import { useI18n } from "@/i18n/react";
+import { useTranslation } from "@/hooks/useTranslation";
 
 interface NoteListProps {
   results: SearchResult[];
@@ -65,7 +65,7 @@ export default function NoteList({
   onDragStartNote,
   onDragEndNote,
 }: NoteListProps) {
-  const { locale, t } = useI18n();
+  const { t } = useTranslation();
   const hasQuery = query.trim().length > 0;
 
   if (
@@ -77,7 +77,7 @@ export default function NoteList({
     return (
       <div className="flex-1 flex items-center justify-center p-4">
         <span className="text-stone text-sm">
-          {t("command.noteList.noResults", { query })}
+          {t("palette.noNotesFor", { query })}
         </span>
       </div>
     );
@@ -107,9 +107,10 @@ export default function NoteList({
               type="text"
               value={newNoteTitle}
               onChange={(e) => onSetNewNoteTitle(e.target.value)}
-              placeholder={t("command.noteList.noteTitle")}
+              placeholder={t("palette.noteTitlePlaceholder")}
+              aria-label={t("palette.newNoteLabel")}
               autoFocus
-              className="flex-1 text-[14px] font-medium bg-transparent text-ink placeholder:text-stone outline-none"
+              className="flex-1 text-[14px] font-medium bg-transparent text-ink placeholder:text-stone outline-none focus-visible:ring-2 focus-visible:ring-coral focus-visible:rounded-sm"
               onKeyDown={(e) => {
                 e.stopPropagation();
                 if (e.key === "Enter") {
@@ -123,7 +124,9 @@ export default function NoteList({
             />
           </div>
           <div className="mt-1 ml-6 text-[10px] text-stone">
-            {t("command.noteList.createHint", { folder: targetFolder })}
+            {t("palette.inFolder")}{" "}
+            <span className="text-coral font-medium">{targetFolder}</span> —{" "}
+            {t("palette.createHint")}
           </div>
         </div>
       )}
@@ -132,14 +135,14 @@ export default function NoteList({
       {!hasQuery && results.length > 0 && (
         <div className="px-4 py-2 border-b border-line/50 bg-line/20">
           <span className="text-[10px] font-semibold text-stone uppercase tracking-wider">
-            {t("command.noteList.allNotes")}
+            {t("palette.recent")}
           </span>
         </div>
       )}
 
       {results.map((result, index) => {
         const displayTitle = normalizeNoteTitle(
-          result.title || result.filename || t("command.noteList.untitled"),
+          result.title || result.filename || t("common.untitled"),
         );
         const displaySnippet = normalizeNoteSnippet(result.snippet);
         const shouldShowSnippet =
@@ -204,7 +207,7 @@ export default function NoteList({
               </span>
             </div>
             <span className="text-[10px] text-stone font-mono">
-              {formatRelativeDate(result.created, locale)}
+              {formatRelativeDate(result.created)}
             </span>
             {shouldShowSnippet && !result.locked && (
               <p className="text-[12px] text-stone leading-relaxed mt-0.5">
@@ -220,13 +223,13 @@ export default function NoteList({
         <>
           <div className="px-4 py-2 border-b border-line/50 bg-line/20">
             <span className="text-[10px] font-semibold text-stone uppercase tracking-wider">
-              {t("command.noteList.related")}
+              {t("palette.related")}
             </span>
           </div>
           {semanticResults.map((result, index) => {
             const globalIndex = results.length + index;
             const displayTitle = normalizeNoteTitle(
-              result.title || result.filename || t("command.noteList.untitled"),
+              result.title || result.filename || t("common.untitled"),
             );
             const displaySnippet = normalizeNoteSnippet(result.snippet);
             const shouldShowSnippet =
@@ -264,10 +267,12 @@ export default function NoteList({
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] text-stone font-mono">
-                    {formatRelativeDate(result.created, locale)}
+                    {formatRelativeDate(result.created)}
                   </span>
-                  <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-coral/10 text-coral">
-                    {Math.round(result.similarity * 100)}% match
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-coral-light text-coral">
+                    {t("palette.matchPercent", {
+                      percent: Math.round(result.similarity * 100),
+                    })}
                   </span>
                 </div>
                 {shouldShowSnippet && (

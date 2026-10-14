@@ -11,22 +11,19 @@
  */
 
 import { Decoration, EditorView, WidgetType } from "@codemirror/view";
+import { t } from "@/i18n";
 import {
   StateField,
-  StateEffect,
+  Facet,
   RangeSet,
   type EditorState,
   type Range,
 } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import type { DecorationSet } from "@codemirror/view";
-import {
-  buildCodeFenceOpening,
-  CODE_BLOCK_LANGUAGE_OPTIONS,
-  extractCodeBlockContent,
-  getCodeFenceLanguage,
-} from "./cm-code-block";
-import { bindImagePreviewElement } from "@/utils/imagePreviewEvent";
+import { Lexer, type Tokens } from "marked";
+
+import { buildCodeFenceOpening, CODE_BLOCK_LANGUAGE_OPTIONS, extractCodeBlockContent, getCodeFenceLanguage } from "./cm-code-block";
 
 // ── Horizontal Rule ─────────────────────────────────────────────────
 
@@ -50,71 +47,187 @@ const hrWidget = new HrWidget();
 
 // ── Inline Image ────────────────────────────────────────────────────
 
+export const remoteImagesAllowed = Facet.define<boolean, boolean>({
+  combine(values) {
+    return values[values.length - 1] ?? false;
+  },
+});
+
+export function isRemoteImageSource(src: string): boolean {
+  const trimmed = src.trim();
+  const looksNetworked = /^(?:https?:)?\/\//i.test(trimmed) || /^https?:/i.test(trimmed);
+  if (!looksNetworked) return false;
+
+  try {
+    const url = new URL(trimmed.startsWith("//") ? `https:${trimmed}` : trimmed);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      url.hostname !== "asset.localhost"
+    );
+  } catch {
+    // A malformed HTTP(S) URL must fail closed. Assigning it to `img.src`
+    // would let the webview decide whether it is network-capable.
+    return true;
+  }
+}
+
+function remoteImageHost(src: string): string {
+  const trimmed = src.trim();
+  try {
+    return new URL(trimmed.startsWith("//") ? `https:${trimmed}` : trimmed)
+      .hostname;
+  } catch {
+    return t("image.externalServer");
+  }
+}
+
+import { bindImagePreviewElement } from "@/utils/imagePreviewEvent";
+
+function appendImage(wrap: HTMLSpanElement, src: string, alt: string) {
+  const img = document.createElement("img");
+  img.src = src;
+  img.alt = alt;
+  img.draggable = false;
+  const previewButton = document.createElement("button");
+  previewButton.type = "button";
+  previewButton.className = "cm-image-preview-button";
+  previewButton.textContent = "+";
+  previewButton.title = t("imagePreview.title");
+  bindImagePreviewElement(previewButton, { src, alt });
+
+  img.onerror = () => {
+    wrap.classList.add("cm-image-error");
+    img.remove();
+    previewButton.remove();
+    const fallback = document.createElement("span");
+    fallback.className = "cm-image-error-text";
+    fallback.textContent = alt || t("image.failedToLoad");
+    wrap.appendChild(fallback);
+  };
+
+  wrap.appendChild(img);
+  wrap.appendChild(previewButton);
+}
+
+function blockedImageMessage(src: string, alt: string): string {
+  const message = t("image.remoteBlocked", { domain: remoteImageHost(src) });
+  return alt ? `${message}: ${alt}` : message;
+}
+
+/** Preserve image consent/loading and editable table DOM while changing labels. */
+export function refreshBlockWidgetLabels(root: ParentNode): void {
+  root.querySelectorAll<HTMLElement>(".cm-image-widget").forEach((wrap) => {
+    const alt = wrap.dataset.imageAlt || "";
+    if (wrap.classList.contains("cm-image-blocked")) {
+      const message = blockedImageMessage(wrap.dataset.imageSource || "", alt);
+      wrap.setAttribute("aria-label", message);
+      const text = wrap.querySelector(".cm-image-blocked-text");
+      if (text) text.textContent = message;
+      const button = wrap.querySelector(".cm-image-load-once");
+      if (button) button.textContent = t("image.loadOnce");
+    }
+    const error = wrap.querySelector(".cm-image-error-text");
+    if (error && !alt) error.textContent = t("image.failedToLoad");
+  });
+  for (const [selector, key] of [[".cm-table-add-row", "table.addRowBelow"], [".cm-table-add-col", "table.addColumnRight"]] as const) {
+    root.querySelectorAll<HTMLElement>(selector).forEach((button) => { button.title = t(key); });
+  }
+}
+
+export function createImageWidgetDom(
+  src: string,
+  alt: string,
+  loadRemoteImages: boolean,
+): HTMLSpanElement {
+  const wrap = document.createElement("span");
+  wrap.className = "cm-image-widget";
+  wrap.dataset.imageSource = src;
+  wrap.dataset.imageAlt = alt;
+
+  if (isRemoteImageSource(src) && !loadRemoteImages) {
+    const blockedMessage = blockedImageMessage(src, alt);
+    wrap.classList.add("cm-image-blocked");
+    wrap.setAttribute("role", "group");
+    wrap.setAttribute(
+      "aria-label",
+      blockedMessage,
+    );
+
+    const message = document.createElement("span");
+    message.className = "cm-image-blocked-text";
+    message.textContent = blockedMessage;
+
+    const loadButton = document.createElement("button");
+    loadButton.type = "button";
+    loadButton.className = "cm-image-load-once";
+    loadButton.textContent = t("image.loadOnce");
+    loadButton.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      wrap.replaceChildren();
+      wrap.classList.remove("cm-image-blocked");
+      wrap.removeAttribute("role");
+      wrap.removeAttribute("aria-label");
+      appendImage(wrap, src, alt);
+    };
+
+    wrap.append(message, loadButton);
+    return wrap;
+  }
+
+  appendImage(wrap, src, alt);
+  return wrap;
+}
+
 class ImageWidget extends WidgetType {
   constructor(
     readonly src: string,
     readonly alt: string,
+    readonly loadRemoteImages: boolean,
   ) {
     super();
   }
 
   eq(other: ImageWidget) {
-    return this.src === other.src && this.alt === other.alt;
+    return (
+      this.src === other.src &&
+      this.alt === other.alt &&
+      this.loadRemoteImages === other.loadRemoteImages
+    );
   }
 
   toDOM() {
-    const wrap = document.createElement("span");
-    wrap.className = "cm-image-widget";
-
-    const img = document.createElement("img");
-    img.src = this.src;
-    img.alt = this.alt;
-    img.draggable = false;
-
-    const previewButton = document.createElement("button");
-    previewButton.type = "button";
-    previewButton.className = "cm-image-preview-button";
-    previewButton.textContent = "+";
-    bindImagePreviewElement(previewButton, { src: this.src, alt: this.alt });
-
-    img.onerror = () => {
-      wrap.classList.add("cm-image-error");
-      img.style.display = "none";
-      previewButton.style.display = "none";
-      const fallback = document.createElement("span");
-      fallback.className = "cm-image-error-text";
-      fallback.textContent = this.alt || "Image failed to load";
-      wrap.appendChild(fallback);
-    };
-
-    wrap.appendChild(img);
-    wrap.appendChild(previewButton);
-    return wrap;
+    return createImageWidgetDom(
+      this.src,
+      this.alt,
+      this.loadRemoteImages,
+    );
   }
 
-  ignoreEvent(event: Event) {
-    return (event.target as HTMLElement | null)?.closest(
-      ".cm-image-preview-button",
-    ) !== null;
+  ignoreEvent() {
+    return false;
   }
 }
 
 // ── Table helpers ───────────────────────────────────────────────────
 
-function parseCells(text: string): string[] {
-  return text
-    .trim()
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
-    .map((c) => c.trim());
+function encodeTableCell(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/\\/g, "&#92;").replace(/\|/g, "\\|").replace(/\r\n?|\n/g, "<br>");
+}
+
+function decodeTableCell(text: string): string {
+  // Decode only our text serialization, never render cell content as HTML.
+  const entities: Record<string, string> = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&#92;": "\\", "&#124;": "|" };
+  return text.replace(/<br\s*\/?>/gi, "\n")
+    .replace(/&(?:amp|lt|gt|#92|#124);/g, (entity) => entities[entity]);
 }
 
 function buildTableMarkdown(headers: string[], rows: string[][]): string {
-  const headerLine = "| " + headers.join(" | ") + " |";
+  const headerLine = "| " + headers.map(encodeTableCell).join(" | ") + " |";
   const sepLine = "| " + headers.map(() => "---").join(" | ") + " |";
   const bodyLines = rows.map(
-    (row) => "| " + headers.map((_, i) => row[i] ?? "").join(" | ") + " |",
+    (row) => "| " + headers.map((_, i) => encodeTableCell(row[i] ?? "")).join(" | ") + " |",
   );
   return [headerLine, sepLine, ...bodyLines].join("\n");
 }
@@ -181,7 +294,7 @@ class CodeBlockHeaderWidget extends WidgetType {
 
     const select = document.createElement("select");
     select.className = "cm-codeblock-language";
-    select.title = "Code block language";
+    select.title = t("format.codeBlock");
     const currentLanguage = getCodeFenceLanguage(this.openingLineText);
 
     for (const option of CODE_BLOCK_LANGUAGE_OPTIONS) {
@@ -227,7 +340,7 @@ class CodeBlockHeaderWidget extends WidgetType {
     copyButton.type = "button";
     copyButton.className = "cm-codeblock-copy";
     copyButton.textContent = labels.copy;
-    copyButton.title = "Copy code";
+    copyButton.title = t("common.copy");
     copyButton.addEventListener("mousedown", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -305,7 +418,7 @@ function showTableContextMenu(
 
   const actions: MenuAction[] = [
     {
-      label: "Insert row above",
+      label: t("table.insertRowAbove"),
       disabled: isHeader,
       action: () => {
         rows.splice(Math.max(rowIdx, 0), 0, headers.map(() => ""));
@@ -313,7 +426,7 @@ function showTableContextMenu(
       },
     },
     {
-      label: "Insert row below",
+      label: t("table.insertRowBelow"),
       action: () => {
         const insertAt = isHeader ? 0 : rowIdx + 1;
         rows.splice(insertAt, 0, headers.map(() => ""));
@@ -322,7 +435,7 @@ function showTableContextMenu(
     },
     { label: "", separator: true, action: () => {} },
     {
-      label: "Insert column left",
+      label: t("table.insertColumnLeft"),
       action: () => {
         headers.splice(colIdx, 0, "");
         rows.forEach((row) => row.splice(colIdx, 0, ""));
@@ -330,7 +443,7 @@ function showTableContextMenu(
       },
     },
     {
-      label: "Insert column right",
+      label: t("table.insertColumnRight"),
       action: () => {
         headers.splice(colIdx + 1, 0, "");
         rows.forEach((row) => row.splice(colIdx + 1, 0, ""));
@@ -339,7 +452,7 @@ function showTableContextMenu(
     },
     { label: "", separator: true, action: () => {} },
     {
-      label: "Delete row",
+      label: t("table.deleteRow"),
       disabled: isHeader || rows.length <= 1,
       action: () => {
         rows.splice(rowIdx, 1);
@@ -347,7 +460,7 @@ function showTableContextMenu(
       },
     },
     {
-      label: "Delete column",
+      label: t("table.deleteColumn"),
       disabled: headers.length <= 1,
       action: () => {
         headers.splice(colIdx, 1);
@@ -424,9 +537,6 @@ function showTableContextMenu(
 
 // ── Interactive Table Widget ────────────────────────────────────────
 
-/** Effect to skip widget recreation when a cell edit syncs to the doc */
-const tableCellEdit = StateEffect.define<void>();
-
 class TableWidget extends WidgetType {
   constructor(
     readonly source: string,
@@ -437,15 +547,24 @@ class TableWidget extends WidgetType {
   }
 
   eq(other: TableWidget) {
-    return this.source === other.source;
+    return this.source === other.source && this.tableFrom === other.tableFrom && this.tableTo === other.tableTo;
+  }
+
+  updateDOM(dom: HTMLElement) {
+    const { headers, rows } = readTableFromDOM(dom);
+    if (buildTableMarkdown(headers, rows) !== this.source) return false;
+    // Cell input already changed this DOM. Keep its focus/selection and update
+    // write offsets, including when edits in an earlier table move this one.
+    dom.dataset.tableFrom = String(this.tableFrom);
+    dom.dataset.tableTo = String(this.tableTo);
+    return true;
   }
 
   toDOM() {
-    const lines = this.source.split("\n").filter((l) => l.trim());
-    if (lines.length < 2) return document.createElement("span");
-
-    const headers = parseCells(lines[0]);
-    const bodyLines = lines.slice(2);
+    const parsed = Lexer.lex(this.source).find((token): token is Tokens.Table => token.type === "table");
+    if (!parsed) return document.createElement("span");
+    const headers = parsed.header.map((cell) => decodeTableCell(cell.text));
+    const bodyRows = parsed.rows.map((row) => row.map((cell) => decodeTableCell(cell.text)));
     const numCols = headers.length;
 
     // Wrapper — contenteditable=false so CM6 ignores this area
@@ -456,6 +575,17 @@ class TableWidget extends WidgetType {
     // Store range for event handlers
     wrapper.dataset.tableFrom = String(this.tableFrom);
     wrapper.dataset.tableTo = String(this.tableTo);
+
+    // The widget owns editable cell DOM; ignoreEvent keeps CodeMirror's text
+    // keymap/observer out. Route cell events directly, like the table buttons.
+    wrapper.addEventListener("input", (event) => {
+      const view = getEditorView(wrapper);
+      if (view) handleTableInput(event, view);
+    });
+    wrapper.addEventListener("keydown", (event) => {
+      const view = getEditorView(wrapper);
+      if (view && handleTableKeydown(event, view)) event.stopPropagation();
+    });
 
     const table = document.createElement("table");
 
@@ -474,8 +604,7 @@ class TableWidget extends WidgetType {
 
     // Body
     const tbody = document.createElement("tbody");
-    for (const line of bodyLines) {
-      const cells = parseCells(line);
+    for (const cells of bodyRows) {
       const tr = document.createElement("tr");
       for (let i = 0; i < numCols; i++) {
         const td = document.createElement("td");
@@ -486,7 +615,7 @@ class TableWidget extends WidgetType {
       }
       tbody.appendChild(tr);
     }
-    if (bodyLines.length === 0) {
+    if (bodyRows.length === 0) {
       const tr = document.createElement("tr");
       for (let i = 0; i < numCols; i++) {
         const td = document.createElement("td");
@@ -517,7 +646,7 @@ class TableWidget extends WidgetType {
     // ── Add row button (direct listener — fires before CM6) ────────
     const addRowBtn = document.createElement("button");
     addRowBtn.className = "cm-table-add-row";
-    addRowBtn.title = "Add row below";
+    addRowBtn.title = t("table.addRowBelow");
     addRowBtn.textContent = "+";
     addRowBtn.addEventListener("mousedown", (e) => {
       e.preventDefault();
@@ -554,7 +683,7 @@ class TableWidget extends WidgetType {
     // ── Add column button (direct listener) ────────────────────────
     const addColBtn = document.createElement("button");
     addColBtn.className = "cm-table-add-col";
-    addColBtn.title = "Add column to the right";
+    addColBtn.title = t("table.addColumnRight");
     addColBtn.textContent = "+";
     addColBtn.addEventListener("mousedown", (e) => {
       e.preventDefault();
@@ -667,6 +796,7 @@ function getAdjacentCell(
 function buildBlockDecorations(state: EditorState): Range<Decoration>[] {
   const decorations: Range<Decoration>[] = [];
   const [cursor] = state.selection.ranges;
+  const loadRemoteImages = state.facet(remoteImagesAllowed);
 
   syntaxTree(state).iterate({
     enter(node) {
@@ -717,10 +847,9 @@ function buildBlockDecorations(state: EditorState): Range<Decoration>[] {
         }
 
         decorations.push(
-          Decoration.replace({ widget: new ImageWidget(src, alt) }).range(
-            node.from,
-            node.to,
-          ),
+          Decoration.replace({
+            widget: new ImageWidget(src, alt, loadRemoteImages),
+          }).range(node.from, node.to),
         );
         return false;
       }
@@ -758,10 +887,7 @@ const blockDecorationField = StateField.define<DecorationSet>({
     return RangeSet.of(buildBlockDecorations(state), true);
   },
 
-  update(decorations, transaction) {
-    if (transaction.effects.some((e) => e.is(tableCellEdit))) {
-      return decorations.map(transaction.changes);
-    }
+  update(_decorations, transaction) {
     return RangeSet.of(buildBlockDecorations(transaction.state), true);
   },
 
@@ -772,9 +898,8 @@ const blockDecorationField = StateField.define<DecorationSet>({
 
 // ── Event handlers (cell editing + keyboard nav + context menu) ──────
 
-const blockWidgetEvents = EditorView.domEventHandlers({
-  // Cell editing: sync contenteditable changes to document
-  input(event: Event, view: EditorView) {
+// Cell editing: sync contenteditable changes to document.
+function handleTableInput(event: Event, view: EditorView) {
     const target = event.target as HTMLElement;
     const wrapper = target.closest(".cm-table-widget") as HTMLElement | null;
     if (!wrapper) return false;
@@ -787,17 +912,14 @@ const blockWidgetEvents = EditorView.domEventHandlers({
 
     view.dispatch({
       changes: { from: range.from, to: range.to, insert: newMarkdown },
-      effects: tableCellEdit.of(undefined),
     });
 
-    // Keep data attrs in sync (widget DOM preserved by tableCellEdit)
-    wrapper.dataset.tableTo = String(range.from + newMarkdown.length);
-
     return true;
-  },
+}
 
-  // Keyboard: Tab, Enter, Escape, Backspace, Arrow inside table cells
-  keydown(event: KeyboardEvent, view: EditorView) {
+// Let the browser handle ordinary editing/composition inside each cell.
+function handleTableKeydown(event: KeyboardEvent, view: EditorView) {
+    if (event.isComposing || event.keyCode === 229) return false;
     const target = event.target as HTMLElement;
     const wrapper = target.closest(".cm-table-widget") as HTMLElement | null;
     if (!wrapper) return false;
@@ -805,6 +927,19 @@ const blockWidgetEvents = EditorView.domEventHandlers({
     const table = target.closest("table");
     const cell = target.closest(".cm-table-cell");
     if (!table || !cell) return true;
+
+    // WebKit's nested editing host otherwise selects the entire note. Keep
+    // replacement typing/paste scoped to the cell the user is editing.
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      const range = document.createRange();
+      range.selectNodeContents(cell);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      return true;
+    }
+    if (event.metaKey || event.ctrlKey || event.altKey || (event.shiftKey && event.key !== "Tab")) return false;
 
     // Exit table: blur cell, place CM6 cursor after the table
     const exitTable = () => {
@@ -876,9 +1011,8 @@ const blockWidgetEvents = EditorView.domEventHandlers({
       return true;
     }
 
-    return true;
-  },
-});
+    return false;
+}
 
 // ── Ensure editable line after trailing block widget ─────────────────
 // Replace decorations consume entire lines including newlines.
@@ -913,6 +1047,5 @@ const ensureTrailingLine = EditorView.updateListener.of((update) => {
 
 export const blockWidgetPlugin = [
   blockDecorationField,
-  blockWidgetEvents,
   ensureTrailingLine,
 ];

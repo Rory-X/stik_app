@@ -2,10 +2,10 @@ use base64::Engine;
 use pulldown_cmark::{html, Options, Parser};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::fs;
-use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 use std::ffi::c_void;
+use std::fs;
+use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 use std::ptr::NonNull;
 
@@ -14,7 +14,7 @@ use objc2::runtime::AnyObject;
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRepPropertyKey, NSView};
 #[cfg(target_os = "macos")]
-use objc2_foundation::{NSData, NSDictionary, NSUInteger};
+use objc2_foundation::{NSData, NSDictionary};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardPayload {
@@ -252,13 +252,13 @@ unsafe fn capture_webview_png_bytes(
 
 #[cfg(target_os = "macos")]
 fn ns_data_to_vec(data: &NSData) -> Vec<u8> {
-    let length = data.length() as usize;
+    let length = data.length();
     let mut buffer = vec![0_u8; length];
     if length > 0 {
         let ptr = NonNull::new(buffer.as_mut_ptr().cast::<c_void>())
             .expect("vector pointer is never null");
         unsafe {
-            data.getBytes_length(ptr, length as NSUInteger);
+            data.getBytes_length(ptr, length);
         }
     }
     buffer
@@ -291,6 +291,35 @@ mod tests {
         assert!(html.contains("<li>one</li>"));
         assert!(html.contains("<li>two</li>"));
         assert!(html.contains("</ul>"));
+    }
+
+    #[test]
+    fn clipboard_preserves_source_and_enabled_markdown_extensions() {
+        let markdown =
+            "| Task | Status |\n| --- | --- |\n| Café | ~~old~~ |\n\n- [x] Done\n- [ ] Pending";
+        let payload = build_clipboard_payload(markdown.to_string()).unwrap();
+        assert_eq!(payload.plain_text, markdown);
+        assert!(payload.html.contains("<table>"));
+        assert!(payload.html.contains("<td>Café</td>"));
+        assert!(payload.html.contains("<del>old</del>"));
+        assert!(payload.html.contains("type=\"checkbox\" checked=\"\""));
+        assert!(payload.html.contains("type=\"checkbox\"/>"));
+    }
+
+    #[test]
+    fn unenabled_extensions_remain_literal_in_clipboard_html() {
+        let html = markdown_to_html("[[vault link]] H~2~O x^2^");
+        assert!(html.contains("[[vault link]] H~2~O x^2^"));
+        assert!(!html.contains("<a "));
+        assert!(!html.contains("<sub>"));
+        assert!(!html.contains("<sup>"));
+    }
+
+    #[test]
+    fn incomplete_markdown_remains_readable() {
+        let html = markdown_to_html("Café & tea **unfinished [link](\n\n```rust\na < b");
+        assert!(html.contains("Café &amp; tea **unfinished [link]("));
+        assert!(html.contains("a &lt; b"));
     }
 
     #[test]

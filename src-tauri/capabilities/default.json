@@ -4,12 +4,13 @@
   "description": "Default capabilities for Stik",
   "windows": [
     "postit",
-    "capture-*",
     "settings",
     "command-palette",
     "sticked-*",
-    "draft-*",
     "apple-notes-picker",
+    "editor",
+    "capture-*",
+    "draft-*",
     "image-preview"
   ],
   "permissions": [
@@ -25,7 +26,12 @@
     "global-shortcut:default",
     {
       "identifier": "shell:allow-spawn",
-      "allow": [{ "name": "binaries/darwinkit", "sidecar": true }]
+      "allow": [
+        {
+          "name": "binaries/darwinkit",
+          "sidecar": true
+        }
+      ]
     },
     "shell:allow-open",
     "dialog:default",
@@ -33,15 +39,23 @@
     {
       "identifier": "fs:allow-read-text-file",
       "allow": [
-        { "path": "$DOCUMENT/Stik/**" },
-        { "path": "$HOME/.stik/**" }
+        {
+          "path": "$DOCUMENT/Stik/**"
+        },
+        {
+          "path": "$HOME/.stik/**"
+        }
       ]
     },
     {
       "identifier": "fs:allow-write-text-file",
       "allow": [
-        { "path": "$DOCUMENT/Stik/**" },
-        { "path": "$HOME/.stik/**" }
+        {
+          "path": "$DOCUMENT/Stik/**"
+        },
+        {
+          "path": "$HOME/.stik/**"
+        }
       ]
     }
   ]

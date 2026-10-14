@@ -1,10 +1,11 @@
 use crate::commands::{notes, session_drafts, settings, sticked_notes};
 use crate::state::{AppState, ImagePreviewContent, LastSavedNote};
+use base64::Engine;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use sticked_notes::StickedNote;
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, Manager, PhysicalPosition, WebviewUrl, WebviewWindow,
+    AppHandle, Emitter, Listener, Manager, PhysicalPosition, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
 
@@ -12,6 +13,11 @@ const SETTINGS_WINDOW_WIDTH: f64 = 860.0;
 const SETTINGS_WINDOW_HEIGHT: f64 = 720.0;
 const SETTINGS_WINDOW_MIN_WIDTH: f64 = 760.0;
 const SETTINGS_WINDOW_MIN_HEIGHT: f64 = 560.0;
+
+const EDITOR_WINDOW_WIDTH: f64 = 1100.0;
+const EDITOR_WINDOW_HEIGHT: f64 = 740.0;
+const EDITOR_WINDOW_MIN_WIDTH: f64 = 820.0;
+const EDITOR_WINDOW_MIN_HEIGHT: f64 = 520.0;
 
 /// Minimum overlap (in physical pixels) between window and monitor for the position to be usable.
 const MIN_OVERLAP: f64 = 80.0;
@@ -173,7 +179,7 @@ fn position_capture_window_near_cursor(
     };
 
     window
-        .set_position(tauri::Position::Logical(LogicalPosition::new(x, y)))
+        .set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)))
         .is_ok()
 }
 
@@ -297,9 +303,10 @@ pub fn show_command_palette(app: &AppHandle) {
             .postit_was_visible
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        *postit_visible = app.webview_windows().iter().any(|(label, window)| {
-            is_capture_window_label(label) && window.is_visible().unwrap_or(false)
-        });
+        *postit_visible = app
+            .get_webview_window("postit")
+            .map(|w| w.is_visible().unwrap_or(false))
+            .unwrap_or(false);
     }
 
     for (label, window) in app.webview_windows() {
@@ -360,17 +367,9 @@ pub fn show_command_palette(app: &AppHandle) {
                         .iter()
                         .any(|(label, _)| label.starts_with("sticked-view-"));
                     if !has_viewing_windows {
-                        if let Some((_, capture)) =
-                            app_handle
-                                .webview_windows()
-                                .into_iter()
-                                .find(|(label, window)| {
-                                    is_capture_window_label(label)
-                                        && window.is_visible().unwrap_or(false)
-                                })
-                        {
-                            let _ = capture.show();
-                            let _ = capture.set_focus();
+                        if let Some(postit) = app_handle.get_webview_window("postit") {
+                            let _ = postit.show();
+                            let _ = postit.set_focus();
                         }
                     }
                 }
@@ -390,11 +389,11 @@ pub fn show_settings(app: &AppHandle) {
         *prev_window = None;
 
         for (label, window) in app.webview_windows() {
-            if label.starts_with("sticked-") || is_capture_window_label(&label) {
-                if window.is_focused().unwrap_or(false) {
-                    *prev_window = Some(label.clone());
-                    break;
-                }
+            if (label.starts_with("sticked-") || is_capture_window_label(&label))
+                && window.is_focused().unwrap_or(false)
+            {
+                *prev_window = Some(label.clone());
+                break;
             }
         }
 
@@ -402,9 +401,10 @@ pub fn show_settings(app: &AppHandle) {
             .postit_was_visible
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        *postit_visible = app.webview_windows().iter().any(|(label, window)| {
-            is_capture_window_label(label) && window.is_visible().unwrap_or(false)
-        });
+        *postit_visible = app
+            .get_webview_window("postit")
+            .map(|w| w.is_visible().unwrap_or(false))
+            .unwrap_or(false);
     }
 
     for (label, window) in app.webview_windows() {
@@ -461,22 +461,47 @@ pub fn show_settings(app: &AppHandle) {
                         let _ = window.set_focus();
                     }
                 } else if postit_visible {
-                    if let Some((_, capture)) =
-                        app_handle
-                            .webview_windows()
-                            .into_iter()
-                            .find(|(label, window)| {
-                                is_capture_window_label(label)
-                                    && window.is_visible().unwrap_or(false)
-                            })
-                    {
-                        let _ = capture.show();
-                        let _ = capture.set_focus();
+                    if let Some(postit) = app_handle.get_webview_window("postit") {
+                        let _ = postit.show();
+                        let _ = postit.set_focus();
                     }
                 }
             }
         });
     }
+}
+
+/// Stik's full editor mode: a real, decorated, taskbar-visible app window
+/// (unlike the transparent always-on-top sticky windows). Singleton — if it
+/// already exists we just focus it.
+pub fn show_editor(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("editor") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+
+    let builder = WebviewWindowBuilder::new(
+        app,
+        "editor",
+        WebviewUrl::App("index.html?window=editor".into()),
+    )
+    .title("Stik Editor")
+    .inner_size(EDITOR_WINDOW_WIDTH, EDITOR_WINDOW_HEIGHT)
+    .min_inner_size(EDITOR_WINDOW_MIN_WIDTH, EDITOR_WINDOW_MIN_HEIGHT)
+    .resizable(true)
+    .center();
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
+    let _ = builder.build();
+}
+
+#[tauri::command]
+pub fn open_editor(app: AppHandle) -> Result<bool, String> {
+    show_editor(&app);
+    Ok(true)
 }
 
 #[tauri::command]
@@ -646,6 +671,14 @@ pub async fn pin_capture_note(
     Ok(note)
 }
 
+fn viewing_note_id(path: &str) -> String {
+    // Preserve path identity without introducing URL or window-label delimiters.
+    format!(
+        "view-{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(path)
+    )
+}
+
 #[tauri::command]
 pub async fn open_note_for_viewing(
     app: AppHandle,
@@ -658,7 +691,7 @@ pub async fn open_note_for_viewing(
         remember_last_note(&state, &path, &folder);
     }
 
-    let id = format!("view-{}", path.replace(['/', '\\', '.', ' '], "-"));
+    let id = viewing_note_id(&path);
     let window_label = format!("sticked-{}", id);
 
     if app.get_webview_window(&window_label).is_some() {
@@ -751,25 +784,55 @@ pub fn get_viewing_note_content(app: AppHandle, id: String) -> Result<serde_json
 }
 
 #[tauri::command]
-pub fn transfer_to_capture(
+pub async fn transfer_to_capture(
     app: AppHandle,
     content: String,
     folder: String,
 ) -> Result<bool, String> {
-    if let Some(window) = app.get_webview_window("postit") {
-        let _ = window.show();
-        let _ = window.set_focus();
-        let _ = window.emit(
-            "transfer-content",
-            serde_json::json!({
-                "content": content,
-                "folder": folder
-            }),
-        );
-        Ok(true)
-    } else {
-        Err("Postit window not found".to_string())
+    let window = app
+        .get_webview_window("postit")
+        .ok_or("Postit window not found")?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let listener = app.once(format!("capture-transfer-result-{id}"), move |event| {
+        let result = serde_json::from_str::<CaptureTransferResult>(event.payload())
+            .map_err(|error| error.to_string())
+            .and_then(|result| result.error.map_or(Ok(true), Err));
+        let _ = sender.send(result);
+    });
+    let result = async {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        window
+            .emit(
+                "transfer-content",
+                serde_json::json!({
+                    "id": id,
+                    "content": content,
+                    "folder": folder
+                }),
+            )
+            .map_err(|error| error.to_string())?;
+        // Do not block the event loop that must deliver the receiver's reply.
+        // A missing listener or failed save leaves the source pin untouched.
+        tauri::async_runtime::spawn_blocking(move || {
+            receiver
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .map_err(|_| {
+                    "Capture did not accept the note; the source is still pinned".to_string()
+                })?
+        })
+        .await
+        .map_err(|error| error.to_string())?
     }
+    .await;
+    app.unlisten(listener);
+    result
+}
+
+#[derive(serde::Deserialize)]
+struct CaptureTransferResult {
+    error: Option<String>,
 }
 
 #[tauri::command]
@@ -794,74 +857,6 @@ pub fn open_manager(app: AppHandle) -> Result<bool, String> {
 pub fn open_settings(app: AppHandle) -> Result<bool, String> {
     show_settings(&app);
     Ok(true)
-}
-
-#[tauri::command]
-pub fn preview_image(app: AppHandle, src: String, alt: String) -> Result<bool, String> {
-    if src.trim().is_empty() {
-        return Err("Image source is empty".to_string());
-    }
-
-    let payload = ImagePreviewContent { src, alt };
-    {
-        let state = app.state::<AppState>();
-        let mut image_preview = state
-            .image_preview
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        *image_preview = Some(payload.clone());
-    }
-
-    if let Some(window) = app.get_webview_window("image-preview") {
-        let _ = window.emit("image-preview-updated", &payload);
-        let _ = window.show();
-        let _ = window.set_focus();
-        return Ok(true);
-    }
-
-    let title = settings::load_settings_from_file()
-        .ok()
-        .and_then(|s| s.locale)
-        .filter(|locale| locale == "zh-CN")
-        .map(|_| "图片预览")
-        .unwrap_or("Image Preview");
-
-    let window = WebviewWindowBuilder::new(
-        &app,
-        "image-preview",
-        WebviewUrl::App("index.html?window=image-preview".into()),
-    )
-    .title(title)
-    .inner_size(860.0, 640.0)
-    .min_inner_size(360.0, 260.0)
-    .resizable(true)
-    .decorations(false)
-    .transparent(true)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .center()
-    .build();
-
-    match window {
-        Ok(win) => {
-            let _ = win.show();
-            let _ = win.set_focus();
-            Ok(true)
-        }
-        Err(e) => Err(format!("Failed to create image preview window: {}", e)),
-    }
-}
-
-#[tauri::command]
-pub fn get_image_preview_content(app: AppHandle) -> Result<ImagePreviewContent, String> {
-    let state = app.state::<AppState>();
-    let image_preview = state
-        .image_preview
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    image_preview
-        .clone()
-        .ok_or_else(|| "No image preview available".to_string())
 }
 
 #[tauri::command]
@@ -932,6 +927,125 @@ pub fn restore_sticked_notes(app: &AppHandle) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{
+        remember_last_note, viewing_note_id, SETTINGS_WINDOW_MIN_WIDTH, SETTINGS_WINDOW_WIDTH,
+    };
+    use crate::state::AppState;
+
+    #[test]
+    fn viewing_ids_keep_similarly_named_files_in_separate_windows() {
+        let paths = [
+            "/notes/a.b.md",
+            "/notes/a b.md",
+            "/notes/a-b.md",
+            "/notes/a/b.md",
+            "/notes/a\\b.md",
+        ];
+        let ids: std::collections::HashSet<_> = paths.into_iter().map(viewing_note_id).collect();
+        assert_eq!(ids.len(), paths.len());
+    }
+
+    #[test]
+    fn viewing_ids_are_safe_in_window_labels_and_url_parameters() {
+        let id = viewing_note_id("/notes/你好 & question?#.md");
+        assert!(id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
+    }
+
+    #[test]
+    fn remember_last_note_updates_state_for_shortcuts() {
+        let state = AppState::new();
+        remember_last_note(&state, "/tmp/stik/foo.md", "Inbox");
+
+        let last = state
+            .last_saved_note
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let note = last.as_ref().expect("last note should be set");
+        assert_eq!(note.path, "/tmp/stik/foo.md");
+        assert_eq!(note.folder, "Inbox");
+    }
+
+    #[test]
+    fn settings_window_min_width_is_large_enough_for_full_menu_bar() {
+        const {
+            assert!(SETTINGS_WINDOW_MIN_WIDTH >= 760.0);
+            assert!(SETTINGS_WINDOW_WIDTH > SETTINGS_WINDOW_MIN_WIDTH);
+        }
+    }
+}
+
+#[tauri::command]
+pub fn preview_image(app: AppHandle, src: String, alt: String) -> Result<bool, String> {
+    if src.trim().is_empty() {
+        return Err("Image source is empty".to_string());
+    }
+
+    let payload = ImagePreviewContent { src, alt };
+    {
+        let state = app.state::<AppState>();
+        let mut image_preview = state
+            .image_preview
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *image_preview = Some(payload.clone());
+    }
+
+    if let Some(window) = app.get_webview_window("image-preview") {
+        let _ = window.emit("image-preview-updated", &payload);
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(true);
+    }
+
+    let title = settings::load_settings_from_file()
+        .ok()
+        .and_then(|s| s.locale)
+        .filter(|locale| locale == "zh-CN")
+        .map(|_| "图片预览")
+        .unwrap_or("Image Preview");
+
+    let window = WebviewWindowBuilder::new(
+        &app,
+        "image-preview",
+        WebviewUrl::App("index.html?window=image-preview".into()),
+    )
+    .title(title)
+    .inner_size(860.0, 640.0)
+    .min_inner_size(360.0, 260.0)
+    .resizable(true)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .center()
+    .build();
+
+    match window {
+        Ok(win) => {
+            let _ = win.show();
+            let _ = win.set_focus();
+            Ok(true)
+        }
+        Err(e) => Err(format!("Failed to create image preview window: {}", e)),
+    }
+}
+
+#[tauri::command]
+pub fn get_image_preview_content(app: AppHandle) -> Result<ImagePreviewContent, String> {
+    let state = app.state::<AppState>();
+    let image_preview = state
+        .image_preview
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    image_preview
+        .clone()
+        .ok_or_else(|| "No image preview available".to_string())
+}
+
 pub fn restore_session_draft_windows(app: &AppHandle) {
     let Ok(drafts) = session_drafts::list_session_drafts_inner() else {
         return;
@@ -998,10 +1112,7 @@ pub fn restore_session_draft_windows(app: &AppHandle) {
 }
 
 fn safe_window_label(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-        .collect()
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes())
 }
 
 fn encode_query_component(value: &str) -> String {
@@ -1018,7 +1129,7 @@ fn encode_query_component(value: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+mod capture_tests {
     use super::{
         capture_position_near_cursor, remember_last_note, DesktopRect, SETTINGS_WINDOW_MIN_WIDTH,
         SETTINGS_WINDOW_WIDTH,
@@ -1041,8 +1152,10 @@ mod tests {
 
     #[test]
     fn settings_window_min_width_is_large_enough_for_full_menu_bar() {
-        assert!(SETTINGS_WINDOW_MIN_WIDTH >= 760.0);
-        assert!(SETTINGS_WINDOW_WIDTH > SETTINGS_WINDOW_MIN_WIDTH);
+        const {
+            assert!(SETTINGS_WINDOW_MIN_WIDTH >= 760.0);
+            assert!(SETTINGS_WINDOW_WIDTH > SETTINGS_WINDOW_MIN_WIDTH);
+        }
     }
 
     #[test]

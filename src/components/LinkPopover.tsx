@@ -9,8 +9,8 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { open } from "@tauri-apps/plugin-shell";
 import type { EditorView } from "@codemirror/view";
 import { normalizeUrl } from "@/utils/normalizeUrl";
+import { useTranslation } from "@/hooks/useTranslation";
 import { consumeEscapeForPopover } from "@/utils/popoverEscape";
-import { useI18n } from "@/i18n/react";
 
 interface LinkPopoverProps {
   editorRef: { current: EditorView | null };
@@ -80,13 +80,17 @@ function getActiveLinkInfo(view: EditorView): LinkInfo | null {
 }
 
 export default function LinkPopover({ getView }: LinkPopoverProps) {
-  const { t } = useI18n();
+  const { t } = useTranslation();
   const [linkInfo, setLinkInfo] = useState<LinkInfo | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState("");
   const [editHref, setEditHref] = useState("");
   const [copied, setCopied] = useState(false);
   const [popoverWidth, setPopoverWidth] = useState(0);
+  // Validation feedback: the save handler used to bail silently on an empty
+  // URL, so the popover just sat there doing nothing.
+  const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const textInputRef = useRef<HTMLInputElement>(null);
   const hrefInputRef = useRef<HTMLInputElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -193,13 +197,23 @@ export default function LinkPopover({ getView }: LinkPopoverProps) {
     setIsEditing(true);
   }, [linkInfo]);
 
-  const handleSaveEdit = useCallback(() => {
+  const handleSaveEdit = useCallback(async () => {
     const view = getView();
     if (!view || !linkInfo) return;
 
     const href = editHref.trim() ? normalizeUrl(editHref.trim()) : "";
     const text = editText.trim() || linkInfo.text || href;
-    if (!href || !text) return;
+    if (!href || !text) {
+      setError(t("link.urlRequired"));
+      hrefInputRef.current?.focus();
+      return;
+    }
+
+    setError(null);
+    setIsSubmitting(true);
+    // Yield once so the disabled/pending state paints before the editor
+    // dispatch, which is synchronous and can be slow on very large documents.
+    await Promise.resolve();
 
     const replacement = `[${text}](${href})`;
     view.dispatch({
@@ -207,8 +221,9 @@ export default function LinkPopover({ getView }: LinkPopoverProps) {
     });
 
     setIsEditing(false);
+    setIsSubmitting(false);
     view.focus();
-  }, [getView, linkInfo, editHref, editText]);
+  }, [getView, linkInfo, editHref, editText, t]);
 
   const handleCancelEdit = useCallback(() => {
     setIsEditing(false);
@@ -243,18 +258,27 @@ export default function LinkPopover({ getView }: LinkPopoverProps) {
       {isEditing ? (
         <form
           className="link-popover-edit"
-          onSubmit={(e) => {
+          onSubmit={async (e) => {
             e.preventDefault();
-            handleSaveEdit();
+            if (isSubmitting) return;
+            setIsSubmitting(true);
+            try {
+              await handleSaveEdit();
+            } finally {
+              setIsSubmitting(false);
+            }
           }}
           onKeyDown={(e) => {
             consumeEscapeForPopover(e, handleCancelEdit);
           }}
         >
           <div className="link-popover-field">
-            <span className="link-popover-field-label">{t("link.text")}</span>
+            <label className="link-popover-field-label" htmlFor="link-popover-text">
+              {t("link.text")}
+            </label>
             <input
               ref={textInputRef}
+              id="link-popover-text"
               type="text"
               value={editText}
               onChange={(e) => setEditText(e.target.value)}
@@ -268,15 +292,23 @@ export default function LinkPopover({ getView }: LinkPopoverProps) {
                 }
               }}
               className="link-popover-input"
-              placeholder={t("link.linkText")}
+              placeholder={t("link.textPlaceholder")}
               spellCheck={false}
             />
           </div>
           <div className="link-popover-field">
-            <span className="link-popover-field-label">URL</span>
+            <label className="link-popover-field-label" htmlFor="link-popover-url">
+              {t("link.url")}
+            </label>
             <input
               ref={hrefInputRef}
+              id="link-popover-url"
               type="text"
+              required
+              minLength={1}
+              pattern=".*\\S.*"
+              aria-invalid={error !== null}
+              aria-describedby={error ? "link-popover-error" : undefined}
               value={editHref}
               onChange={(e) => setEditHref(e.target.value)}
               onKeyDown={(e) => {
@@ -287,9 +319,24 @@ export default function LinkPopover({ getView }: LinkPopoverProps) {
               spellCheck={false}
             />
           </div>
+          {error && (
+            <p
+              id="link-popover-error"
+              role="alert"
+              className="link-popover-error text-[11px] text-coral"
+            >
+              {error}
+            </p>
+          )}
           <div className="link-popover-edit-actions">
-            <button type="submit" className="link-popover-btn link-popover-save">
-              {t("common.save")}
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              aria-disabled={isSubmitting || !editHref.trim()}
+              aria-busy={isSubmitting}
+              className="link-popover-btn link-popover-save disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSubmitting ? t("common.saving") : t("common.save")}
             </button>
           </div>
         </form>
@@ -308,50 +355,58 @@ export default function LinkPopover({ getView }: LinkPopoverProps) {
               ? linkInfo.href.slice(0, 38) + "\u2026"
               : linkInfo.href}
           </a>
-          <div className="link-popover-actions">
+          <div className="link-popover-actions" role="toolbar" aria-label={t("link.urlLabel")}>
             <button
+              type="button"
               onClick={handleOpen}
               className="link-popover-btn"
               title={t("link.openInBrowser")}
+              aria-label={t("link.openInBrowser")}
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
                 <polyline points="15 3 21 3 21 9" />
                 <line x1="10" y1="14" x2="21" y2="3" />
               </svg>
             </button>
             <button
+              type="button"
               onClick={handleCopy}
               className="link-popover-btn"
-              title={copied ? t("link.copied") : t("link.copyUrl")}
+              title={copied ? t("common.copied") : t("link.copyUrl")}
+              aria-label={copied ? t("common.copied") : t("link.copyUrl")}
             >
               {copied ? (
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="20 6 9 17 4 12" />
                 </svg>
               ) : (
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
                   <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                 </svg>
               )}
             </button>
             <button
+              type="button"
               onClick={handleStartEdit}
               className="link-popover-btn"
               title={t("link.edit")}
+              aria-label={t("link.edit")}
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                 <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
               </svg>
             </button>
             <button
+              type="button"
               onClick={handleUnlink}
               className="link-popover-btn link-popover-unlink"
               title={t("link.remove")}
+              aria-label={t("link.remove")}
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M15 7h3a5 5 0 0 1 0 10h-3m-6 0H6a5 5 0 0 1 0-10h3" />
                 <line x1="2" y1="2" x2="22" y2="22" />
               </svg>

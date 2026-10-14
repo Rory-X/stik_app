@@ -1,40 +1,118 @@
+/// Internationalization — locale registry, active-locale store and the
+/// `translate` primitive. Deliberately dependency-free: the whole runtime is
+/// a lookup plus `{placeholder}` substitution, which is all Stik needs.
+///
+/// English (`en`) is the source of truth. Every other locale is typed as
+/// `Record<TranslationKey, string>`, so a missing or misspelled key is a
+/// compile error rather than a silent fallback at runtime.
 import { en } from "./locales/en";
 import { zhCN } from "./locales/zh-CN";
-import type { Locale, MessageKey, Messages } from "./types";
 
-export type { Locale, MessageKey, Messages };
+export type TranslationKey = keyof typeof en;
+export type Translations = Record<TranslationKey, string>;
+export type Locale = "en" | "zh-CN";
 
-export const LOCALES: Record<Locale, Messages> = {
+export interface LocaleInfo {
+  id: Locale;
+  /// Name in the language itself — what a speaker of it looks for.
+  nativeLabel: string;
+  /// English name, shown alongside so the picker is navigable when you
+  /// can't read the current UI language.
+  englishLabel: string;
+}
+
+export const LOCALES: readonly LocaleInfo[] = [
+  { id: "en", nativeLabel: "English", englishLabel: "English" },
+  { id: "zh-CN", nativeLabel: "简体中文", englishLabel: "Simplified Chinese" },
+] as const;
+
+const CATALOGUES: Record<Locale, Translations> = {
   en,
   "zh-CN": zhCN,
 };
 
-export const SUPPORTED_LOCALES: Locale[] = ["en", "zh-CN"];
+export const DEFAULT_LOCALE: Locale = "en";
 
-export function resolveLocale(value: unknown): Locale {
-  return value === "zh-CN" || value === "en" ? value : "en";
+export function isLocale(value: string): value is Locale {
+  return LOCALES.some((l) => l.id === value);
+}
+
+/// Resolve a settings value (or a browser language tag) to a supported locale.
+/// Falls back to the base language so `zh`, `zh-Hans` and `zh-CN` all match.
+export function resolveLocale(value: string | null | undefined): Locale {
+  if (!value) return DEFAULT_LOCALE;
+  if (isLocale(value)) return value;
+
+  const base = value.toLowerCase().split(/[-_]/)[0];
+  if (base === "zh") return "zh-CN";
+  const match = LOCALES.find((l) => l.id.toLowerCase().split("-")[0] === base);
+  return match ? match.id : DEFAULT_LOCALE;
+}
+
+export type TranslationVars = Record<string, string | number>;
+
+/// Look up `key` in `locale`, falling back to English so a partially
+/// translated locale degrades to readable English instead of a raw key.
+export function translate(
+  locale: Locale,
+  key: TranslationKey,
+  vars?: TranslationVars,
+): string {
+  const template = CATALOGUES[locale]?.[key] ?? en[key] ?? key;
+  if (!vars) return template;
+
+  return template.replace(/\{(\w+)\}/g, (whole, name: string) =>
+    name in vars ? String(vars[name]) : whole,
+  );
+}
+
+// ── Active locale store ──────────────────────────────────────────────
+// Module-level rather than React context: Stik renders several independent
+// window roots from one bundle, and a plain store keeps them in sync without
+// threading a provider through every entry point.
+
+let activeLocale: Locale = DEFAULT_LOCALE;
+const subscribers = new Set<() => void>();
+
+export function getLocale(): Locale {
+  return activeLocale;
+}
+
+export function setLocale(next: Locale): void {
+  if (next === activeLocale) return;
+  activeLocale = next;
+  document.documentElement.lang = next;
+  subscribers.forEach((notify) => notify());
+}
+
+/// Translate using the currently active locale.
+///
+/// For code outside React — CodeMirror widgets, plain helpers — where the
+/// `useTranslation` hook is unavailable. These call sites are rebuilt when
+/// the editor re-renders, so they pick up language changes naturally.
+export function t(key: TranslationKey, vars?: TranslationVars): string {
+  return translate(activeLocale, key, vars);
+}
+
+export function subscribeToLocale(onChange: () => void): () => void {
+  subscribers.add(onChange);
+  return () => subscribers.delete(onChange);
+}
+
+
+// Compatibility for the fork's recovery and backend-error helpers.
+export type MessageKey = TranslationKey;
+export type Messages = Translations;
+export const SUPPORTED_LOCALES: Locale[] = LOCALES.map((locale) => locale.id);
+
+export function createTranslator(locale: unknown) {
+  const resolved = resolveLocale(typeof locale === "string" ? locale : undefined);
+  return (key: TranslationKey, vars?: TranslationVars) => translate(resolved, key, vars);
 }
 
 export function getMissingLocaleKeys(
   source: Record<string, string>,
   target: Record<string, string>,
 ): string[] {
-  return Object.keys(source)
-    .filter((key) => !(key in target))
-    .sort();
-}
-
-export function createTranslator(locale: unknown) {
-  const resolved = resolveLocale(locale);
-  const messages = LOCALES[resolved];
-
-  return (key: MessageKey, replacements?: Record<string, string | number>) => {
-    let message = messages[key] ?? en[key] ?? key;
-    if (replacements) {
-      for (const [name, value] of Object.entries(replacements)) {
-        message = message.split(`{${name}}`).join(String(value));
-      }
-    }
-    return message;
-  };
+  return Object.keys(source).filter((key) => !(key in target)).sort();
 }

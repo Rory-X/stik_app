@@ -1,6 +1,6 @@
 [package]
 name = "stik"
-version = "0.8.2"
+version = "0.9.0"
 description = "Instant thought capture"
 authors = ["Massi"]
 edition = "2021"
@@ -11,7 +11,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-prost-build = "0.13"
+prost-build = "0.14"
 
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png", "protocol-asset", "devtools"] }
@@ -23,19 +23,19 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 chrono = "0.4"
-dirs = "5"
+dirs = "6"
 uuid = { version = "1", features = ["v4"] }
-pulldown-cmark = "0.12"
+pulldown-cmark = "0.13"
 arboard = "3"
-base64 = "0.22"
+base64 = "0.23"
 image = { version = "0.25", default-features = false, features = ["png"] }
 tauri-plugin-dialog = "2.6.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 flate2 = "1"
-prost = "0.13"
-aes-gcm = "0.10"
-rand = "0.8"
+prost = "0.14"
+aes-gcm = "0.11"
+rand = "0.10"
 notify = { version = "7", default-features = false, features = ["macos_fsevent"] }
 notify-debouncer-mini = "0.5"
 
@@ -43,15 +43,8 @@ notify-debouncer-mini = "0.5"
 security-framework = "3"
 objc2 = { version = "0.6.3", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSView", "NSBitmapImageRep", "NSImageRep", "NSApplication", "NSRunningApplication", "NSEvent", "NSScreen"] }
-core-graphics = "0.24"
 core-foundation = "0.10"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData", "NSDictionary", "NSGeometry"] }
-
-# Not used by Rust source: pins the Linux GTK tree's glib to >=0.20
-# (GHSA-wrw7-89jp-8q8g). Building glib-sys needs system GLib, so it must stay
-# Linux-only or `cargo test` fails on macOS and Windows.
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-glib = ">=0.20"
 
 [features]
 # The custom-protocol feature tells tauri-codegen to embed the frontend

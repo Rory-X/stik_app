@@ -12,15 +12,17 @@ import {
   useCallback,
   useImperativeHandle,
   forwardRef,
+  lazy,
+  Suspense,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { ChineseScriptPreference, DictationStatus } from "@/types";
-import DictationSetupModal from "./DictationSetupModal";
-import { useI18n } from "@/i18n/react";
-import { translateBackendError } from "@/i18n/errors";
 import { normalizeChineseScript } from "@/utils/chineseScript";
+import type { ChineseScriptPreference, DictationStatus } from "@/types";
 import "@/styles/speech-button.css";
+import { useTranslation } from "@/hooks/useTranslation";
+
+const DictationSetupModal = lazy(() => import("./DictationSetupModal"));
 
 interface SpeechButtonProps {
   onPartialText: (text: string, replaceFrom: number) => void;
@@ -64,7 +66,7 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
     },
     ref,
   ) {
-    const { t } = useI18n();
+    const { t } = useTranslation();
     const [state, setState] = useState<DictationState>("idle");
     const [error, setError] = useState<string | null>(null);
     const [setupOpen, setSetupOpen] = useState(false);
@@ -139,7 +141,6 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
 
     // ── Subscribe to dictation events (once on mount) ──
     useEffect(() => {
-      mountedRef.current = true;
       const unlistenPartial = listen<{ text: string }>(
         "dictation:partial",
         (event) => {
@@ -163,9 +164,7 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
           if (!mountedRef.current) return;
           setState("idle");
           activelyRecordingRef.current = false;
-          setError(
-            translateBackendError(event.payload.message || "Dictation failed", t),
-          );
+          setError(event.payload.message || t("dictation.failed"));
         },
       );
 
@@ -174,7 +173,7 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
         unlistenPartial.then((fn) => fn());
         unlistenError.then((fn) => fn());
       };
-    }, [t]);
+    }, []);
 
     // ── Auto-clear error after 3 seconds ──
     useEffect(() => {
@@ -184,11 +183,17 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
     }, [error]);
 
     const startDictation = useCallback(async () => {
+      if (!mountedRef.current || document.body.inert) return;
       setError(null);
       insertOriginRef.current = getInsertOrigin();
       setState("starting");
       try {
         const status = await invoke<DictationStatus>("dictation_get_status");
+        if (!mountedRef.current) return;
+        if (document.body.inert) {
+          setState("idle");
+          return;
+        }
         if (status.installed_models.length === 0) {
           setState("idle");
           setSetupOpen(true);
@@ -217,10 +222,10 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
       } catch (e) {
         if (mountedRef.current) {
           setState("idle");
-          setError(translateBackendError(e, t));
+          setError(String(e));
         }
       }
-    }, [language, activeModel, getInsertOrigin, t]);
+    }, [language, activeModel, getInsertOrigin]);
 
     const stopDictation = useCallback(async () => {
       activelyRecordingRef.current = false;
@@ -238,12 +243,13 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
       } catch (e) {
         if (mountedRef.current) {
           setState("idle");
-          setError(translateBackendError(e, t));
+          setError(String(e));
         }
       }
-    }, [t]);
+    }, []);
 
     const handleToggle = useCallback(async () => {
+      if (document.body.inert) return;
       if (state === "processing" || state === "starting") return;
 
       if (state === "recording") {
@@ -254,6 +260,7 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
       // Re-check status so cached hasModel=false from a startup race
       // with the sidecar doesn't wrongly pop the modal.
       const installed = await refreshStatus();
+      if (!mountedRef.current || document.body.inert) return;
       if (!installed) {
         setSetupOpen(true);
         return;
@@ -294,14 +301,14 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
               .join(" ")}
             title={
               isRecording
-                ? "Stop dictation"
+                ? t("dictation.stop")
                 : isBusy
                   ? state === "starting"
-                    ? "Starting…"
-                    : "Processing…"
-                  : "Start dictation"
+                    ? t("dictation.starting")
+                    : t("dictation.processing")
+                  : t("dictation.start")
             }
-            aria-label={isRecording ? "Stop dictation" : "Start dictation"}
+            aria-label={isRecording ? t("dictation.stop") : t("dictation.start")}
             aria-pressed={isRecording}
           >
             {isRecording ? <RecordingIcon /> : <MicrophoneIcon />}
@@ -317,21 +324,23 @@ const SpeechButton = forwardRef<SpeechButtonRef, SpeechButtonProps>(
         </div>
 
         {setupOpen && (
-          <DictationSetupModal
-            onClose={() => setSetupOpen(false)}
-            onReady={async (modelId, language) => {
-              setSetupOpen(false);
-              // Persist the user's choice into settings.json so the
-              // next launch (and every subsequent mic click) knows
-              // which model to use — and so ⌘⇧V can actually work
-              // without re-prompting.
-              if (onActiveModelSelected) {
-                await onActiveModelSelected(modelId, language);
-              }
-              await refreshStatus();
-              await startDictation();
-            }}
-          />
+          <Suspense fallback={null}>
+            <DictationSetupModal
+              onClose={() => setSetupOpen(false)}
+              onReady={async (modelId, language) => {
+                setSetupOpen(false);
+                // Persist the user's choice into settings.json so the
+                // next launch (and every subsequent mic click) knows
+                // which model to use — and so ⌘⇧V can actually work
+                // without re-prompting.
+                if (onActiveModelSelected) {
+                  await onActiveModelSelected(modelId, language);
+                }
+                await refreshStatus();
+                await startDictation();
+              }}
+            />
+          </Suspense>
         )}
       </>
     );

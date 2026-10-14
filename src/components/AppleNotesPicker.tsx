@@ -2,12 +2,11 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { AppleNoteEntry, StikSettings } from "@/types";
+import { useTranslation } from "@/hooks/useTranslation";
 import { formatRelativeDate } from "@/utils/formatRelativeDate";
-import { useI18n } from "@/i18n/react";
-import { translateBackendError } from "@/i18n/errors";
 
 export default function AppleNotesPicker() {
-  const { locale, t } = useI18n();
+  const { t } = useTranslation();
   const [notes, setNotes] = useState<AppleNoteEntry[]>([]);
   const [filteredNotes, setFilteredNotes] = useState<AppleNoteEntry[]>([]);
   const [query, setQuery] = useState("");
@@ -36,7 +35,7 @@ export default function AppleNotesPicker() {
         if (msg.startsWith("FULL_DISK_ACCESS_REQUIRED")) {
           setNeedsPermission(true);
         } else {
-          setError(translateBackendError(msg, t));
+          setError(msg);
         }
       } finally {
         setIsLoading(false);
@@ -45,7 +44,7 @@ export default function AppleNotesPicker() {
 
     loadNotes();
     setTimeout(() => inputRef.current?.focus(), 100);
-  }, [t]);
+  }, []);
 
   // Filter notes when query changes
   useEffect(() => {
@@ -97,11 +96,11 @@ export default function AppleNotesPicker() {
 
         await getCurrentWindow().close();
       } catch (err) {
-        setError(translateBackendError(err, t));
+        setError(String(err));
         setIsImporting(false);
       }
     },
-    [isImporting, targetFolder, t]
+    [isImporting, targetFolder]
   );
 
   // Keyboard navigation
@@ -162,10 +161,11 @@ export default function AppleNotesPicker() {
           </svg>
         </div>
         <h2 className="text-sm font-semibold text-ink mb-2">
-          {t("appleNotes.fullDiskAccessTitle")}
+          {t("appleNotes.fullDiskRequired")}
         </h2>
         <p className="text-[12px] text-stone text-center mb-4 max-w-[340px] leading-relaxed">
-          {t("appleNotes.fullDiskAccessDescription")}
+          {t("appleNotes.fullDiskExplain")}{" "}
+          {t("appleNotes.fullDiskSteps")}
         </p>
         <button
           onClick={() => invoke("open_full_disk_access_settings")}
@@ -234,8 +234,9 @@ export default function AppleNotesPicker() {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={t("appleNotes.search")}
-            className="flex-1 bg-transparent text-[15px] text-ink placeholder:text-stone outline-none"
+            placeholder={t("appleNotes.searchPlaceholder")}
+            aria-label={t("appleNotes.searchLabel")}
+            className="flex-1 bg-transparent text-[15px] text-ink placeholder:text-stone outline-none focus-visible:ring-2 focus-visible:ring-coral focus-visible:rounded-md"
           />
           {isLoading && (
             <span className="text-stone text-sm animate-pulse">...</span>
@@ -244,7 +245,7 @@ export default function AppleNotesPicker() {
       </div>
 
       {/* Results */}
-      <div ref={resultsRef} className="flex-1 overflow-y-auto">
+      <div ref={resultsRef} className="flex-1 overflow-y-auto" role="status" aria-live="polite">
         {isLoading ? (
           <div className="p-4 text-center text-stone text-sm">
             {t("appleNotes.loading")}
@@ -252,8 +253,8 @@ export default function AppleNotesPicker() {
         ) : filteredNotes.length === 0 ? (
           <div className="p-4 text-center text-stone text-sm">
             {query.trim()
-              ? t("appleNotes.noMatching", { query })
-              : t("appleNotes.noNotes")}
+              ? t("appleNotes.noMatch", { query })
+              : t("appleNotes.noneFound")}
           </div>
         ) : (
           filteredNotes.map((note, index) => (
@@ -273,16 +274,16 @@ export default function AppleNotesPicker() {
                   {note.folder_name}
                 </span>
                 <span className="text-[10px] text-stone font-mono">
-                  {formatRelativeDate(note.modified_date, locale)}
+                  {formatRelativeDate(note.modified_date)}
                 </span>
-                {note.account_name !== "Local" && (
+                {note.account_name !== t("appleNotes.local") && (
                   <span className="text-[9px] text-stone/60">
                     {note.account_name}
                   </span>
                 )}
               </div>
               <p className="text-[14px] font-medium text-ink leading-relaxed truncate">
-                {note.title || t("appleNotes.untitled")}
+                {note.title || t("common.untitled")}
               </p>
               {note.snippet && (
                 <p className="text-[12px] text-stone leading-relaxed mt-0.5 truncate">
@@ -304,18 +305,21 @@ export default function AppleNotesPicker() {
             <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">
               ↑↓
             </kbd>{" "}
-            {t("command.footer.navigate")}
+
+            {t("palette.navigate")}
           </span>
           <span>
             <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">
               ↵
             </kbd>{" "}
-            {t("appleNotes.import")}
+
+            {t("palette.import")}
           </span>
         </div>
         <span>
-          <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">esc</kbd>{" "}
-          {t("command.footer.close")}
+          <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">{t("common.esc")}</kbd>{" "}
+
+          {t("palette.close")}
         </span>
       </div>
     </div>

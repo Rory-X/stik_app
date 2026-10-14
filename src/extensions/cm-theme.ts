@@ -59,15 +59,15 @@ export const stikEditorTheme = EditorView.theme({
     borderLeftColor: "rgba(var(--color-coral), 0.35)",
     borderLeftWidth: "1px",
   },
-  ".cm-selectionBackground": {
-    backgroundColor: "rgba(232, 112, 95, 0.15) !important",
-  },
   ".cm-selectionLayer": {
     zIndex: "20 !important",
     pointerEvents: "none",
   },
+  ".cm-selectionBackground": {
+    backgroundColor: "rgba(var(--color-coral), 0.15) !important",
+  },
   "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": {
-    backgroundColor: "rgba(232, 112, 95, 0.2) !important",
+    backgroundColor: "rgba(var(--color-coral), 0.2) !important",
   },
   ".cm-activeLine": {
     backgroundColor: "transparent",
@@ -92,7 +92,7 @@ export const stikEditorTheme = EditorView.theme({
     transition: "background-color 0.15s",
   },
   ".cm-wikilink:hover": {
-    backgroundColor: "rgba(232, 112, 95, 0.1)",
+    backgroundColor: "rgba(var(--color-coral), 0.1)",
   },
   // Autocomplete panel
   ".cm-tooltip-autocomplete": {
@@ -123,7 +123,7 @@ export const stikEditorTheme = EditorView.theme({
     fontSize: "10px",
     fontWeight: "600",
     color: "rgb(var(--color-coral))",
-    backgroundColor: "rgba(232, 112, 95, 0.1)",
+    backgroundColor: "rgba(var(--color-coral), 0.1)",
     padding: "1px 6px",
     borderRadius: "99px",
     marginLeft: "8px",
@@ -134,11 +134,11 @@ export const stikEditorTheme = EditorView.theme({
     borderBottom: "1px solid rgb(var(--color-line))",
   },
   ".cm-searchMatch": {
-    backgroundColor: "rgba(232, 112, 95, 0.2)",
+    backgroundColor: "rgba(var(--color-coral), 0.2)",
     borderRadius: "2px",
   },
   ".cm-searchMatch.cm-searchMatch-selected": {
-    backgroundColor: "rgba(232, 112, 95, 0.35)",
+    backgroundColor: "rgba(var(--color-coral), 0.35)",
   },
   // Horizontal rule widget
   ".cm-hr-widget": {
@@ -201,7 +201,7 @@ export const stikEditorTheme = EditorView.theme({
     opacity: "1",
   },
   ".cm-table-add-row:hover": {
-    backgroundColor: "rgba(232, 112, 95, 0.1)",
+    backgroundColor: "rgba(var(--color-coral), 0.1)",
     color: "rgb(var(--color-coral))",
   },
   // Add column button — vertical bar on right edge
@@ -224,7 +224,7 @@ export const stikEditorTheme = EditorView.theme({
     opacity: "1",
   },
   ".cm-table-add-col:hover": {
-    backgroundColor: "rgba(232, 112, 95, 0.1)",
+    backgroundColor: "rgba(var(--color-coral), 0.1)",
     color: "rgb(var(--color-coral))",
   },
   // Table context menu (right-click)
@@ -251,7 +251,7 @@ export const stikEditorTheme = EditorView.theme({
     lineHeight: "1.4",
   },
   ".cm-table-menu-item:hover": {
-    backgroundColor: "rgba(232, 112, 95, 0.1)",
+    backgroundColor: "rgba(var(--color-coral), 0.1)",
     color: "rgb(var(--color-coral))",
   },
   ".cm-table-menu-disabled": {
@@ -267,7 +267,6 @@ export const stikEditorTheme = EditorView.theme({
   // Inline image widget
   ".cm-image-widget": {
     display: "inline-block",
-    position: "relative",
     maxWidth: "100%",
     margin: "4px 0",
     lineHeight: "0",
@@ -278,37 +277,6 @@ export const stikEditorTheme = EditorView.theme({
     height: "auto",
     borderRadius: "6px",
     display: "block",
-    transition: "filter 120ms ease, transform 120ms ease",
-  },
-  ".cm-image-widget img:hover": {
-    filter: "brightness(0.94)",
-  },
-  ".cm-image-preview-button": {
-    position: "absolute",
-    top: "8px",
-    right: "8px",
-    width: "28px",
-    height: "28px",
-    borderRadius: "6px",
-    border: "1px solid rgba(255, 255, 255, 0.22)",
-    backgroundColor: "rgba(20, 20, 20, 0.72)",
-    color: "white",
-    fontSize: "18px",
-    lineHeight: "24px",
-    fontWeight: "600",
-    cursor: "pointer",
-    opacity: "0",
-    transform: "translateY(-2px)",
-    transition: "opacity 120ms ease, transform 120ms ease, background-color 120ms ease",
-    pointerEvents: "none",
-  },
-  ".cm-image-widget:hover .cm-image-preview-button, .cm-image-preview-button:focus": {
-    opacity: "1",
-    transform: "translateY(0)",
-    pointerEvents: "auto",
-  },
-  ".cm-image-preview-button:hover": {
-    backgroundColor: "rgba(20, 20, 20, 0.9)",
   },
   ".cm-image-widget.cm-image-error": {
     display: "flex",
@@ -323,6 +291,40 @@ export const stikEditorTheme = EditorView.theme({
     fontSize: "12px",
     color: "rgb(var(--color-stone))",
     lineHeight: "1.4",
+  },
+  ".cm-image-widget.cm-image-blocked": {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    minHeight: "48px",
+    border: "1px dashed rgb(var(--color-line))",
+    borderRadius: "6px",
+    padding: "8px 12px",
+    lineHeight: "1.4",
+  },
+  ".cm-image-blocked-text": {
+    flex: "1",
+    minWidth: "0",
+    fontSize: "12px",
+    color: "rgb(var(--color-stone))",
+  },
+  ".cm-image-load-once": {
+    flexShrink: "0",
+    border: "1px solid rgb(var(--color-line))",
+    borderRadius: "6px",
+    padding: "4px 8px",
+    backgroundColor: "rgb(var(--color-surface))",
+    color: "rgb(var(--color-ink))",
+    fontSize: "12px",
+    cursor: "pointer",
+  },
+  ".cm-image-load-once:hover": {
+    borderColor: "rgb(var(--color-coral))",
+    color: "rgb(var(--color-coral))",
+  },
+  ".cm-image-load-once:focus-visible": {
+    outline: "2px solid rgb(var(--color-coral))",
+    outlineOffset: "2px",
   },
   ".cm-codeblock-header": {
     display: "flex",

@@ -1,3 +1,7 @@
+use std::sync::Mutex;
+
+static STORE_LOCK: Mutex<()> = Mutex::new(());
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -18,8 +22,7 @@ pub struct PinnedNotesStore {
 }
 
 fn get_pinned_notes_path() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or("Could not find home directory")?;
-    let stik_config = home.join(".stik");
+    let stik_config = super::paths::config_dir()?;
     fs::create_dir_all(&stik_config).map_err(|e| e.to_string())?;
     Ok(stik_config.join("pinned_notes.json"))
 }
@@ -37,23 +40,9 @@ fn save_pinned_notes(store: &PinnedNotesStore) -> Result<(), String> {
     versioning::save_versioned(&path, store)
 }
 
-fn canonical_or_original(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
-}
-
 fn ensure_stik_note_path(path: &str) -> Result<(), String> {
-    let stik_folder = get_stik_folder()?;
-    let note_path = PathBuf::from(path);
-    let canonical_stik = canonical_or_original(&stik_folder);
-    let canonical_note = canonical_or_original(&note_path);
-
-    if !canonical_note.starts_with(&canonical_stik) {
-        return Err("Invalid path: note must be within Stik folder".to_string());
-    }
-    if !super::storage::path_exists(path) {
-        return Err("Note file does not exist".to_string());
-    }
-
+    let root = get_stik_folder()?;
+    super::path_security::authorize_existing_path(&root, Path::new(path))?;
     Ok(())
 }
 
@@ -79,6 +68,7 @@ pub fn pin_order(path: &str) -> Option<String> {
 }
 
 pub fn remove_pinned_note(path: &str) -> Result<(), String> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     let mut store = load_pinned_notes()?;
     let initial_len = store.notes.len();
     store.notes.retain(|note| note.path != path);
@@ -89,6 +79,7 @@ pub fn remove_pinned_note(path: &str) -> Result<(), String> {
 }
 
 pub fn move_pinned_note(old_path: &str, new_path: &str) -> Result<(), String> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     let mut store = load_pinned_notes()?;
     let mut changed = false;
     for note in &mut store.notes {
@@ -105,6 +96,7 @@ pub fn move_pinned_note(old_path: &str, new_path: &str) -> Result<(), String> {
 
 #[tauri::command]
 pub fn toggle_note_pinned(path: String) -> Result<bool, String> {
+    let _guard = STORE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     ensure_stik_note_path(&path)?;
 
     let mut store = load_pinned_notes()?;

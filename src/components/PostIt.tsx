@@ -6,23 +6,16 @@ import {
   closeCompletion,
 } from "@codemirror/autocomplete";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import Editor, { type EditorRef } from "./Editor";
 import FolderPicker from "./FolderPicker";
 import AiMenu from "./AiMenu";
 import SpeechButton from "./SpeechButton";
-import type {
-  ChineseScriptPreference,
-  SessionDraftCursor,
-  SessionDraftKind,
-  StickedNote,
-  StikSettings,
-} from "@/types";
+import type { ChineseScriptPreference, SessionDraftCursor, SessionDraftKind, StickedNote, StikSettings } from "@/types";
 import type { VimMode } from "@/extensions/cm-vim";
 import {
   getSlashCommandNames,
-  setSlashCommandLocale,
   setCustomTemplates,
 } from "@/extensions/cm-slash-commands";
 import {
@@ -30,9 +23,9 @@ import {
   normalizeMarkdownForCopy,
 } from "@/utils/normalizeMarkdownForCopy";
 import { shouldSaveOnGlobalEscape } from "@/utils/captureEscape";
+import { matchesShortcut } from "@/utils/matchShortcut";
 import { isCaptureSlashQuery } from "@/utils/slashQuery";
 import { markdownToPlainText } from "@/utils/markdownToHtml";
-import type { ImagePreviewPayload } from "@/utils/imagePreviewEvent";
 import { shouldOpenVimCommandBar } from "@/utils/vimCommandKey";
 import {
   resolveImagePaths,
@@ -40,16 +33,15 @@ import {
 } from "@/utils/imageMarkdownPaths";
 import { resolveCaptureFolder } from "@/utils/folderSelection";
 import { getFolderColor } from "@/utils/folderColors";
+import { errorMessage } from "@/utils/appError";
 import { formatShortcutDisplay } from "./ShortcutRecorder";
 import { loadGoogleFont, loadCustomFont } from "@/utils/fonts";
-import {
-  createSessionDraftId,
-  resolveSessionDraftTarget,
-  shouldPersistSessionDraft,
-} from "@/utils/sessionDrafts";
 import SyncIndicator from "./SyncIndicator";
-import { useI18n } from "@/i18n/react";
+import { useTranslation } from "@/hooks/useTranslation";
 import { usePlatformCapabilities } from "@/hooks/usePlatformCapabilities";
+import { createSessionDraftId, resolveSessionDraftTarget, shouldPersistSessionDraft } from "@/utils/sessionDrafts";
+import type { ImagePreviewPayload } from "@/utils/imagePreviewEvent";
+import { useAppQuit } from "@/hooks/useAppQuit";
 
 interface PostItProps {
   folder: string;
@@ -101,11 +93,14 @@ function Toast({ message, onDone }: { message: string; onDone: () => void }) {
 
   return (
     <div
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
       className={`
         fixed bottom-6 left-1/2 -translate-x-1/2 z-[250]
         px-4 py-2.5 rounded-xl shadow-stik
         text-[13px] font-medium bg-ink text-bg
-        transition-all duration-200 ease-out
+        transition-[opacity,transform] duration-200 ease-out
         ${isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2"}
       `}
     >
@@ -134,12 +129,13 @@ export default function PostIt({
   isRecoveredSessionDraft = false,
   autoStartDictation = false,
 }: PostItProps) {
-  const { t } = useI18n();
+  const { t } = useTranslation();
   const capabilities = usePlatformCapabilities();
   const [content, setContent] = useState(initialContent || "");
   const [showPicker, setShowPicker] = useState(false);
   const [suggestedFolder, setSuggestedFolder] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveComplete, setSaveComplete] = useState(false);
   const [isPinning, setIsPinning] = useState(false);
   const [isCopying, setIsCopying] = useState(false);
   const [copyMode, setCopyMode] = useState<CopyMode | null>(null);
@@ -167,6 +163,7 @@ export default function PostIt({
     "auto",
   );
   const [icloudEnabled, setIcloudEnabled] = useState(false);
+  const [loadRemoteImages, setLoadRemoteImages] = useState(false);
   const [zenMode, setZenMode] = useState(false);
   const [dictationActiveModel, setDictationActiveModel] = useState<
     string | null
@@ -196,6 +193,14 @@ export default function PostIt({
   const copyMenuRef = useRef<HTMLDivElement | null>(null);
   const foldersRef = useRef<string[]>([]);
   const contentRef = useRef(content);
+  const pendingSaveRef = useRef<Promise<string | undefined> | null>(null);
+  const closeSaveRef = useRef<Promise<void> | null>(null);
+  const transferInProgressRef = useRef(false);
+  const lastSavedContentRef = useRef(initialContent);
+  const savedDraftPathRef = useRef<string | undefined>(undefined);
+  const pinnedClosedRef = useRef(false);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cursorSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingCursorRef = useRef<{ head: number; anchor: number } | null>(
     null,
@@ -215,6 +220,26 @@ export default function PostIt({
     isViewing && originalPath
       ? originalPath
       : currentStickedId || stickedId || null;
+
+  useEffect(() => {
+    contentRef.current = content;
+  }, [content]);
+
+  // Flush pending cursor save on unmount (don't lose position if closed within debounce window)
+  useEffect(() => {
+    return () => {
+      if (cursorSaveTimerRef.current) clearTimeout(cursorSaveTimerRef.current);
+      if (pendingCursorRef.current && cursorPosKey) {
+        const { head, anchor } = pendingCursorRef.current;
+        invoke("save_cursor_position", {
+          id: cursorPosKey,
+          head,
+          anchor,
+        }).catch(() => {});
+      }
+    };
+  }, [cursorPosKey]);
+
   const sessionDraftTarget = resolveSessionDraftTarget({
     isSticked,
     isViewing,
@@ -229,10 +254,6 @@ export default function PostIt({
     sessionDraftTarget?.originalPath ?? null;
   const sessionDraftCursorHead = sessionDraftCursor?.head ?? null;
   const sessionDraftCursorAnchor = sessionDraftCursor?.anchor ?? null;
-
-  useEffect(() => {
-    contentRef.current = content;
-  }, [content]);
 
   const rotateNewSessionDraftId = useCallback(() => {
     if (!isRecoveredSessionDraft && activeSessionDraftKind === "new") {
@@ -252,27 +273,15 @@ export default function PostIt({
     }
   }, [activeSessionDraftId]);
 
-  // Flush pending cursor save on unmount (don't lose position if closed within debounce window)
-  useEffect(() => {
-    return () => {
-      if (cursorSaveTimerRef.current) clearTimeout(cursorSaveTimerRef.current);
-      if (pendingCursorRef.current && cursorPosKey) {
-        const { head, anchor } = pendingCursorRef.current;
-        invoke("save_cursor_position", {
-          id: cursorPosKey,
-          head,
-          anchor,
-        }).catch(() => {});
-      }
-    };
-  }, [cursorPosKey]);
-
   // Resolve the notes directory path for image path resolution
-  const [notesDir, setNotesDir] = useState<string | null>(null);
+  const [notesDir, setNotesDir] = useState<string | null | undefined>(undefined);
   useEffect(() => {
     invoke<string>("get_notes_directory")
       .then(setNotesDir)
-      .catch(() => {});
+      .catch((error) => {
+        setNotesDir(null);
+        setToast(errorMessage(error, t("note.failedToLoad")));
+      });
   }, []);
 
   // Apply font family: load from custom fonts or Google Fonts, then update the CSS var.
@@ -322,19 +331,20 @@ export default function PostIt({
 
   // Resolve image paths for display when loading content with existing images
   const baseInitialContent = initialContent || "";
+  // Settings remount the editor; seed it from the live draft, even when empty.
   const resolvedInitialContent =
-    notesDir && baseInitialContent
+    notesDir && content
       ? resolveImagePaths(
-          baseInitialContent,
+          content,
           `${notesDir}/${folder}`,
           convertFileSrc,
         )
-      : baseInitialContent;
+      : content;
   const hasResolvableAssetImages =
     /(?:\]\(\.assets\/|src=["']\.assets\/|asset:\/\/localhost\/|asset\.localhost\/|file:\/\/\/)/.test(
       baseInitialContent,
     );
-  const shouldWaitForNotesDir = hasResolvableAssetImages && !notesDir;
+  const shouldWaitForNotesDir = hasResolvableAssetImages && notesDir === undefined;
 
   // Sync content state with initialContent (for sticked notes)
   useEffect(() => {
@@ -354,17 +364,21 @@ export default function PostIt({
         setCustomFonts(s.custom_fonts ?? []);
         setFolderColors(s.folder_colors ?? {});
         setSystemShortcuts(s.system_shortcuts ?? {});
-        setSlashCommandLocale(s.locale);
         setCustomTemplates(s.custom_templates ?? []);
         setTextDirection(
           (s.text_direction as "auto" | "ltr" | "rtl") || "auto",
         );
         setIcloudEnabled(s.icloud?.enabled ?? false);
+        setLoadRemoteImages(s.load_remote_images ?? false);
+        setZenMode(s.zen_mode_enabled ?? false);
         setDictationActiveModel(s.dictation?.active_model ?? null);
         setDictationLanguage(s.dictation?.active_language ?? null);
         setDictationChineseScript(s.dictation?.chinese_script ?? "simplified");
       })
-      .catch(() => {});
+      .catch((error) => {
+        setVimEnabled(false);
+        setToast(errorMessage(error, t("note.failedToLoad")));
+      });
     invoke<string[]>("list_folders")
       .then((f) => {
         foldersRef.current = f;
@@ -379,17 +393,15 @@ export default function PostIt({
       setCustomFonts(event.payload.custom_fonts ?? []);
       setFolderColors(event.payload.folder_colors ?? {});
       setSystemShortcuts(event.payload.system_shortcuts ?? {});
-      setSlashCommandLocale(event.payload.locale);
       setCustomTemplates(event.payload.custom_templates ?? []);
       setTextDirection(
         (event.payload.text_direction as "auto" | "ltr" | "rtl") || "auto",
       );
       setIcloudEnabled(event.payload.icloud?.enabled ?? false);
+      setLoadRemoteImages(event.payload.load_remote_images ?? false);
       setDictationActiveModel(event.payload.dictation?.active_model ?? null);
       setDictationLanguage(event.payload.dictation?.active_language ?? null);
-      setDictationChineseScript(
-        event.payload.dictation?.chinese_script ?? "simplified",
-      );
+      setDictationChineseScript(event.payload.dictation?.chinese_script ?? "simplified");
     });
     return () => {
       unlisten.then((fn) => fn());
@@ -440,7 +452,7 @@ export default function PostIt({
       if (isRestoringCursorRef.current) return;
       pendingCursorRef.current = { head, anchor };
       lastCursorRef.current = { head, anchor };
-      setCursorRevision((revision) => revision + 1);
+      setCursorRevision((value) => value + 1);
       if (!cursorPosKey) return;
       if (cursorSaveTimerRef.current) clearTimeout(cursorSaveTimerRef.current);
       cursorSaveTimerRef.current = setTimeout(() => {
@@ -467,34 +479,19 @@ export default function PostIt({
   // isRestoringCursorRef stays true until this completes, suppressing saves so
   // the initial (0,0) selection from editor mount can't overwrite the real position.
   useEffect(() => {
-    if (vimEnabled === null || shouldWaitForNotesDir) {
-      isRestoringCursorRef.current = false;
-      return;
-    }
-
-    if (sessionDraftCursorHead !== null && sessionDraftCursorAnchor !== null) {
-      isRestoringCursorRef.current = true;
-      const timer = setTimeout(() => {
-        editorRef.current?.setCursor(
-          sessionDraftCursorHead,
-          sessionDraftCursorAnchor,
-        );
-        isRestoringCursorRef.current = false;
-      }, 50);
-      return () => {
-        clearTimeout(timer);
-        isRestoringCursorRef.current = false;
-      };
-    }
-
-    if (!cursorPosKey) {
+    const hasRecoveredCursor = sessionDraftCursorHead !== null && sessionDraftCursorAnchor !== null;
+    if (vimEnabled === null || shouldWaitForNotesDir || (!cursorPosKey && !hasRecoveredCursor)) {
       // No restore needed (capture mode or editor not ready yet) — unsuppress immediately
       isRestoringCursorRef.current = false;
       return;
     }
-
     isRestoringCursorRef.current = true;
     const timer = setTimeout(() => {
+      if (sessionDraftCursorHead !== null && sessionDraftCursorAnchor !== null) {
+        editorRef.current?.setCursor(sessionDraftCursorHead, sessionDraftCursorAnchor);
+        isRestoringCursorRef.current = false;
+        return;
+      }
       invoke<{ head: number; anchor: number } | null>("get_cursor_position", {
         id: cursorPosKey,
       })
@@ -510,13 +507,7 @@ export default function PostIt({
       clearTimeout(timer);
       isRestoringCursorRef.current = false;
     };
-  }, [
-    vimEnabled,
-    shouldWaitForNotesDir,
-    cursorPosKey,
-    sessionDraftCursorHead,
-    sessionDraftCursorAnchor,
-  ]);
+  }, [vimEnabled, shouldWaitForNotesDir, cursorPosKey, sessionDraftCursorHead, sessionDraftCursorAnchor]);
 
   const clearTransientSlashQuery = useCallback(() => {
     if (isSticked) return;
@@ -533,14 +524,8 @@ export default function PostIt({
     });
     editorRef.current?.clear();
     contentRef.current = "";
-    void clearCurrentSessionDraft();
-    rotateNewSessionDraftId();
-  }, [
-    isSticked,
-    onContentChange,
-    clearCurrentSessionDraft,
-    rotateNewSessionDraftId,
-  ]);
+    savedDraftPathRef.current = undefined;
+  }, [isSticked, onContentChange]);
 
   // New shortcut-triggered capture session: reset transient slash/folder-picker state.
   useEffect(() => {
@@ -575,37 +560,6 @@ export default function PostIt({
     window.addEventListener("focus", handleWindowFocus);
     return () => window.removeEventListener("focus", handleWindowFocus);
   }, [isSaving, vimMode, isSticked]);
-
-  // Listen for content transfer from unpinned sticked notes (only in capture mode)
-  useEffect(() => {
-    if (isSticked) return; // Only main capture window listens
-
-    const unlisten = listen<{ content: string; folder: string }>(
-      "transfer-content",
-      (event) => {
-        const transferredContent = event.payload.content || "";
-        setContent(transferredContent);
-        onFolderChange(event.payload.folder);
-        const resolvedContent = notesDir
-          ? resolveImagePaths(
-              transferredContent,
-              `${notesDir}/${event.payload.folder}`,
-              convertFileSrc,
-            )
-          : transferredContent;
-        // Focus editor and move cursor to end
-        setTimeout(() => {
-          editorRef.current?.setContent(resolvedContent);
-          editorRef.current?.focus();
-          editorRef.current?.moveToEnd?.();
-        }, 100);
-      },
-    );
-
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, [isSticked, notesDir, onFolderChange]);
 
   // Slash-query state is cleared on new sessions via shortcut-triggered
   // and on save via handleSaveAndClose. No separate postit-blur listener
@@ -647,72 +601,177 @@ export default function PostIt({
     return contentRef.current;
   }, []);
 
-  const handleSaveAndClose = useCallback(async () => {
-    const currentContent = getLiveContent();
-    const isTransientSlashQuery =
-      activeSessionDraftKind !== "edit" &&
-      !isSticked &&
-      isCaptureSlashQuery(currentContent);
-    const shouldCloseWithoutSaving =
-      activeSessionDraftKind !== "edit" &&
-      (isTransientSlashQuery || isMarkdownEffectivelyEmpty(currentContent));
+  const clearCapture = useCallback(() => {
+    void clearCurrentSessionDraft();
+    rotateNewSessionDraftId();
+    savedDraftPathRef.current = undefined;
+    setContent("");
+    contentRef.current = "";
+    onContentChange?.("");
+    setShowPicker(false);
+    editorRef.current?.clear();
+  }, [onContentChange, clearCurrentSessionDraft, rotateNewSessionDraftId]);
 
-    if (shouldCloseWithoutSaving) {
+  // All save callers share one operation. If content changes while IPC is in
+  // flight (for example dictation), drain the newer text before acknowledging.
+  const persistDraft = useCallback((): Promise<string | undefined> => {
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    if (pendingSaveRef.current) return pendingSaveRef.current;
+    pendingSaveRef.current = (async () => {
+      let savedPath: string | undefined;
+      while (true) {
+        const currentContent = getLiveContent();
+        const updatePath = originalPath || savedDraftPathRef.current;
+        if (isSticked && isPinned && currentStickedId && !pinnedClosedRef.current) {
+          await invoke("update_sticked_note", {
+            id: currentStickedId, content: currentContent,
+            folder: null, position: null, size: null,
+          });
+        } else if (updatePath) {
+          if (currentContent !== lastSavedContentRef.current) {
+            const locked = await invoke<boolean>("is_note_locked", { path: updatePath });
+            if (locked) {
+              await invoke("save_locked_note", { path: updatePath, content: currentContent });
+            } else {
+              await invoke("update_note", { path: updatePath, content: currentContent, preserveEmpty: true });
+            }
+          }
+          savedPath = updatePath;
+        } else {
+          if (isMarkdownEffectivelyEmpty(currentContent) || (!isSticked && isCaptureSlashQuery(currentContent))) return savedPath;
+          const targetFolder = await resolveFolderForAction();
+          const path = await onSave(currentContent, targetFolder);
+          savedPath = typeof path === "string" ? path : undefined;
+          // Keep the created file across pending input and failed retries;
+          // subsequent snapshots update it instead of creating duplicate notes.
+          savedDraftPathRef.current = savedPath;
+        }
+        lastSavedContentRef.current = currentContent;
+        if (getLiveContent() === currentContent) {
+          // A successful capture is consumed even if another window cancels
+          // app quit. Never clear text that arrived during the pending save.
+          if (!isSticked) clearCapture();
+          return savedPath;
+        }
+      }
+    })().finally(() => { pendingSaveRef.current = null; });
+    return pendingSaveRef.current;
+  }, [isSticked, isPinned, currentStickedId, isViewing, originalPath, getLiveContent, resolveFolderForAction, onSave, clearCapture]);
+
+  // A delivered event is not acceptance. Save occupied capture first, and
+  // acknowledge only once the editor owns the new text; the source stays pinned
+  // on failure or timeout. Use current callbacks without resubscribing on typing.
+  const acceptTransferRef = useRef(async (_payload: { content: string; folder: string }) => {});
+  acceptTransferRef.current = async (payload) => {
+    if (transferInProgressRef.current || closeSaveRef.current || document.body.inert ||
+      (window as unknown as { __stikDictationHoldOpen?: boolean }).__stikDictationHoldOpen) {
+      throw new Error(t("common.saving"));
+    }
+    transferInProgressRef.current = true;
+    flushSync(() => setIsSaving(true));
+    try {
+      if (!editorRef.current?.getView()) throw new Error(t("note.failedToLoad"));
+      await persistDraft();
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+      const resolved = notesDir
+        ? resolveImagePaths(payload.content, `${notesDir}/${payload.folder}`, convertFileSrc)
+        : payload.content;
       flushSync(() => {
-        setContent("");
-        onContentChange?.("");
-        setShowPicker(false);
+        onFolderChange(payload.folder);
+        setContent(payload.content);
+        contentRef.current = payload.content;
+        onContentChange?.(payload.content);
+        setSaveComplete(false);
       });
-      editorRef.current?.clear();
-      contentRef.current = "";
-      await clearCurrentSessionDraft();
-      rotateNewSessionDraftId();
+      editorRef.current?.setContent(resolved);
+      editorRef.current?.moveToEnd?.();
+    } finally {
+      transferInProgressRef.current = false;
+      setIsSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isSticked) return;
+    const unlisten = listen<{ id: string; content: string; folder: string }>("transfer-content", async ({ payload }) => {
+      let error: string | null = null;
+      try { await acceptTransferRef.current(payload); }
+      catch (cause) {
+        error = errorMessage(cause, t("postit.saveFailed"));
+        setToast(error);
+      }
+      await emit(`capture-transfer-result-${payload.id}`, { error }).catch((cause) => {
+        setToast(errorMessage(cause, t("postit.saveFailed")));
+      });
+    });
+    return () => { void unlisten.then((dispose) => dispose()); };
+  }, [isSticked, t]);
+
+  useAppQuit(async () => {
+    if (transferInProgressRef.current) throw new Error(t("common.saving"));
+    if ((window as unknown as { __stikDictationHoldOpen?: boolean }).__stikDictationHoldOpen) {
+      throw new Error(t("postit.finishDictationBeforeQuit"));
+    }
+    if (closeSaveRef.current) await closeSaveRef.current;
+    await persistDraft();
+    if ((window as unknown as { __stikDictationHoldOpen?: boolean }).__stikDictationHoldOpen) {
+      throw new Error(t("postit.finishDictationBeforeQuit"));
+    }
+  }, (error) => setToast(errorMessage(error, t("postit.saveFailed"))));
+
+  useEffect(() => () => {
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+  }, []);
+
+  const handleSaveAndClose = useCallback(async () => {
+    if (closeSaveRef.current || isSaving) return;
+    const idToClose = currentStickedId || stickedId;
+    if (isSticked && !idToClose) return;
+    const emptyCapture = !isSticked && (isMarkdownEffectivelyEmpty(getLiveContent()) || isCaptureSlashQuery(getLiveContent()));
+    if (emptyCapture) {
+      clearCapture();
       await onClose();
       return;
     }
-
-    try {
-      const targetFolder = await resolveFolderForAction();
-
-      setIsSaving(true);
-      const savedPath = await onSave(currentContent, targetFolder);
-
-      // Save cursor position under the note's file path so Cmd+Shift+L
-      // can restore it when reopening the note in viewing mode.
+    setIsSaving(true);
+    setSaveComplete(false);
+    closeSaveRef.current = (async () => {
+      let savedPath = await persistDraft();
+      if (isSticked && isPinned && currentStickedId && !pinnedClosedRef.current) {
+        savedPath = await invoke<string>("close_sticked_note", {
+          id: currentStickedId, saveToFolder: true,
+        });
+        pinnedClosedRef.current = true;
+        savedDraftPathRef.current = savedPath || undefined;
+      }
       if (savedPath && pendingCursorRef.current) {
         const { head, anchor } = pendingCursorRef.current;
-        invoke("save_cursor_position", { id: savedPath, head, anchor }).catch(
-          () => {},
-        );
+        invoke("save_cursor_position", { id: savedPath, head, anchor }).catch(() => {});
       }
+    })();
+    try {
+      await closeSaveRef.current;
       await clearCurrentSessionDraft();
-
-      setTimeout(async () => {
-        setIsSaving(false);
-        setContent("");
-        onContentChange?.("");
-        editorRef.current?.clear();
-        contentRef.current = "";
-        rotateNewSessionDraftId();
-        await onClose();
+      setSaveComplete(true);
+      closeTimerRef.current = setTimeout(async () => {
+        try {
+          if (isSticked) await invoke("close_sticked_window", { id: idToClose });
+          else await onClose();
+        } catch (error) {
+          setToast(errorMessage(error, t("postit.saveFailed")));
+        } finally {
+          setIsSaving(false);
+          setSaveComplete(false);
+        }
       }, 600);
     } catch (error) {
-      console.error("Failed to save note:", error);
       setIsSaving(false);
-      setToast(t("postit.toast.saveFailed"));
+      setToast(errorMessage(error, t("postit.saveFailed")));
+    } finally {
+      closeSaveRef.current = null;
     }
-  }, [
-    isSticked,
-    activeSessionDraftKind,
-    onSave,
-    onClose,
-    onContentChange,
-    resolveFolderForAction,
-    getLiveContent,
-    clearCurrentSessionDraft,
-    rotateNewSessionDraftId,
-    t,
-  ]);
+  }, [isSaving, isSticked, isPinned, currentStickedId, stickedId, getLiveContent, clearCapture, onClose, persistDraft, t]);
 
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -761,18 +820,12 @@ export default function PostIt({
           isPinning,
         })
       ) {
-        if (isSticked && !isPinned) {
-          handleSaveAndCloseSticked();
-        } else {
-          handleSaveAndClose();
-        }
+        void handleSaveAndClose();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-    // Note: handleSaveAndCloseSticked is intentionally omitted — it reads live
-    // content from the editor view ref, so a stale closure still saves correctly.
   }, [
     showPicker,
     isSaving,
@@ -784,57 +837,47 @@ export default function PostIt({
     handleSaveAndClose,
   ]);
 
+  // Toggling Zen also writes it to settings so the mode survives a restart
+  // (#93). Persisting is best-effort: failing to save must never block the
+  // toggle the user just asked for.
+  const toggleZenMode = useCallback(() => {
+    setZenMode((prev) => {
+      const next = !prev;
+      invoke<StikSettings>("get_settings")
+        .then((s) =>
+          invoke("save_settings", {
+            settings: { ...s, zen_mode_enabled: next },
+          }),
+        )
+        .catch(() => {});
+      return next;
+    });
+  }, []);
+
   // Zen mode shortcut (reads from settings, defaults to Cmd+.)
   useEffect(() => {
-    const shortcutStr = systemShortcuts.zen_mode || "Cmd+Period";
+    // `??` not `||`: an empty string means the user cleared this shortcut
+    // deliberately (#92), so nothing should be bound at all.
+    const shortcutStr = systemShortcuts.zen_mode ?? "Cmd+Period";
+    if (!shortcutStr) return;
     const handleZenToggle = (e: KeyboardEvent) => {
-      const parts = shortcutStr.split("+");
-      const key = parts[parts.length - 1];
-      const needsMeta = parts.some(
-        (p) => p === "Cmd" || p === "Command" || p === "Meta",
-      );
-      const needsShift = parts.some((p) => p === "Shift");
-      const needsAlt = parts.some((p) => p === "Alt" || p === "Option");
-      const needsCtrl = parts.some((p) => p === "Ctrl" || p === "Control");
-
-      if (needsMeta !== e.metaKey) return;
-      if (needsShift !== e.shiftKey) return;
-      if (needsAlt !== e.altKey) return;
-      if (needsCtrl !== e.ctrlKey) return;
-
-      // Match the key portion
-      const eventKey =
-        e.key === "." ? "Period" : e.key === "," ? "Comma" : e.key;
-      if (eventKey.toLowerCase() !== key.toLowerCase()) return;
+      if (!matchesShortcut(shortcutStr, e)) return;
 
       e.preventDefault();
-      setZenMode((prev) => !prev);
+      toggleZenMode();
     };
     window.addEventListener("keydown", handleZenToggle);
     return () => window.removeEventListener("keydown", handleZenToggle);
-  }, [systemShortcuts.zen_mode]);
+  }, [systemShortcuts.zen_mode, toggleZenMode]);
 
   // Dictation shortcut (reads from settings, defaults to Cmd+Shift+D)
   useEffect(() => {
-    const shortcutStr = systemShortcuts.dictation || "Cmd+Shift+D";
+    // Cleared means unbound, same as zen mode above (#92).
+    const shortcutStr = systemShortcuts.dictation ?? "Cmd+Shift+D";
+    if (!shortcutStr) return;
     const handleDictation = (e: KeyboardEvent) => {
-      const parts = shortcutStr.split("+");
-      const key = parts[parts.length - 1];
-      const needsMeta = parts.some(
-        (p) => p === "Cmd" || p === "Command" || p === "Meta",
-      );
-      const needsShift = parts.some((p) => p === "Shift");
-      const needsAlt = parts.some((p) => p === "Alt" || p === "Option");
-      const needsCtrl = parts.some((p) => p === "Ctrl" || p === "Control");
-
-      if (needsMeta !== e.metaKey) return;
-      if (needsShift !== e.shiftKey) return;
-      if (needsAlt !== e.altKey) return;
-      if (needsCtrl !== e.ctrlKey) return;
-
-      const eventKey =
-        e.key === "." ? "Period" : e.key === "," ? "Comma" : e.key;
-      if (eventKey.toLowerCase() !== key.toLowerCase()) return;
+      if (document.body.inert || transferInProgressRef.current) return;
+      if (!matchesShortcut(shortcutStr, e)) return;
 
       e.preventDefault();
       speechRef.current?.toggle();
@@ -843,14 +886,18 @@ export default function PostIt({
     return () => window.removeEventListener("keydown", handleDictation);
   }, [systemShortcuts.dictation]);
 
-  // Voice-note global shortcut. Dynamic capture windows receive this through
-  // URL params; the default postit still supports the event path.
+  // Voice-note global shortcut — Rust fires `start-dictation` after
+  // showing the postit window. The listener is mounted once for the
+  // lifetime of the postit webview, so late-firing events (e.g. fired
+  // before focus transition completes) still land correctly.
   useEffect(() => {
     const unlisten = listen("start-dictation", () => {
+      if (document.body.inert || transferInProgressRef.current) return;
       // Small delay to make sure the window is focused and the editor
       // has committed its mount before we toggle the mic — without it,
       // the cursor position captured by getInsertOrigin can be stale.
       window.setTimeout(() => {
+        if (document.body.inert || transferInProgressRef.current) return;
         speechRef.current?.toggle();
       }, 80);
     });
@@ -955,7 +1002,7 @@ export default function PostIt({
       if (isCopying) return;
       if (isMarkdownEffectivelyEmpty(content)) {
         setIsCopyMenuOpen(false);
-        showToast(t("postit.toast.nothingToCopy"));
+        showToast(t("postit.nothingToCopy"));
         return;
       }
 
@@ -982,14 +1029,14 @@ export default function PostIt({
             plainText,
           });
 
-          showToast(t("postit.toast.copiedRichText"));
+          showToast(t("postit.copiedRichText"));
         } else if (mode === "markdown") {
           const markdownText = normalizeMarkdownForCopy(content);
           const copied = await copyPlainText(markdownText);
           if (!copied) {
-            throw new Error("Markdown copy failed in all available methods");
+            throw new Error(t("postit.markdownCopyFailed"));
           }
-          showToast(t("postit.toast.copiedMarkdown"));
+          showToast(t("postit.copiedMarkdown"));
         } else {
           const activeElement = document.activeElement as HTMLElement | null;
           const shouldRestoreEditorFocus =
@@ -1008,7 +1055,7 @@ export default function PostIt({
               );
             });
             await invoke("copy_visible_note_image_to_clipboard");
-            showToast(t("postit.toast.copiedImage"));
+            showToast(t("postit.copiedImage"));
           } finally {
             document.documentElement.classList.remove("capturing-image");
             if (shouldRestoreEditorFocus) {
@@ -1023,9 +1070,9 @@ export default function PostIt({
           error instanceof Error &&
           error.message.includes("not supported")
         ) {
-          showToast(t("postit.toast.imageCopyUnsupported"));
+          showToast(t("postit.imageCopyUnsupported"));
         } else {
-          showToast(t("postit.toast.copyFailed"));
+          showToast(t("postit.copyFailed"));
         }
       } finally {
         setIsCopying(false);
@@ -1035,221 +1082,168 @@ export default function PostIt({
     [content, folder, isCopying, copyPlainText, showToast],
   );
 
+  const handleImagePreview = useCallback(
+    async ({ src, alt }: ImagePreviewPayload) => {
+      try {
+        await invoke("preview_image", { src, alt });
+      } catch (err) {
+        console.error("Failed to preview image:", err);
+      }
+    },
+    [],
+  );
+
   const hasMeaningfulContent = !isMarkdownEffectivelyEmpty(content);
   const hasValidFolder = folder.trim().length > 0;
   // Pin from capture mode
   const handlePin = useCallback(async () => {
-    if (isPinning || isMarkdownEffectivelyEmpty(content)) return;
-
+    if (isPinning || isSaving || transferInProgressRef.current || pendingSaveRef.current ||
+      closeSaveRef.current || document.body.inert || isMarkdownEffectivelyEmpty(getLiveContent())) return;
+    if ((window as unknown as { __stikDictationHoldOpen?: boolean }).__stikDictationHoldOpen) {
+      showToast(t("postit.finishDictationBeforeQuit"));
+      return;
+    }
+    transferInProgressRef.current = true;
+    flushSync(() => { setIsPinning(true); setIsSaving(true); });
     try {
       const targetFolder = await resolveFolderForAction();
-
-      setIsPinning(true);
+      const snapshot = getLiveContent();
       await invoke("pin_capture_note", {
-        content,
+        content: snapshot,
         folder: targetFolder,
       });
-      await clearCurrentSessionDraft();
-      setContent("");
-      editorRef.current?.clear();
-      contentRef.current = "";
-      rotateNewSessionDraftId();
-      await onClose();
+      // Queued native input is a newer draft, not part of the created pin.
+      if (getLiveContent() === snapshot) {
+        clearCapture();
+        await onClose();
+      }
+      else {
+        await getCurrentWindow().show();
+        await getCurrentWindow().setFocus();
+      }
     } catch (error) {
       console.error("Failed to pin note:", error);
+      showToast(errorMessage(error, t("common.somethingWentWrong")));
     } finally {
+      transferInProgressRef.current = false;
       setIsPinning(false);
+      setIsSaving(false);
     }
-  }, [
-    content,
-    isPinning,
-    onClose,
-    resolveFolderForAction,
-    clearCurrentSessionDraft,
-    rotateNewSessionDraftId,
-  ]);
+  }, [isPinning, isSaving, getLiveContent, resolveFolderForAction, showToast, clearCapture, onClose, t]);
 
   // Toggle pin state for sticked notes
   const handleTogglePin = useCallback(async () => {
     if (!currentStickedId && !isViewing) return;
+    if (transferInProgressRef.current || closeSaveRef.current || isSaving || document.body.inert) return;
 
     if (isPinned) {
       // Unpin: transfer content to main capture window and close this one
+      if ((window as unknown as { __stikDictationHoldOpen?: boolean }).__stikDictationHoldOpen) {
+        showToast(t("postit.finishDictationBeforeQuit"));
+        return;
+      }
+      transferInProgressRef.current = true;
+      flushSync(() => setIsSaving(true));
       try {
         const idToClose = currentStickedId || stickedId;
-
-        // Remove from persistence
+        await persistDraft();
+        const snapshot = getLiveContent();
+        await invoke("transfer_to_capture", { content: snapshot, folder });
+        // Native input arriving despite inert belongs to the source. Never
+        // delete it merely because capture accepted an earlier snapshot.
+        if (getLiveContent() !== snapshot) {
+          await persistDraft();
+          return;
+        }
         if (currentStickedId) {
           await invoke("close_sticked_note", {
             id: currentStickedId,
             saveToFolder: false,
           });
+          pinnedClosedRef.current = true;
+          setIsPinned(false);
         }
-
-        // Transfer content to main postit window
-        await invoke("transfer_to_capture", { content, folder });
-
+        if (getLiveContent() !== snapshot) return;
         // Close this sticked window
         if (idToClose) {
           await invoke("close_sticked_window", { id: idToClose });
         }
       } catch (error) {
         console.error("Failed to unpin note:", error);
-        // Fallback: just keep window open as unpinned
-        setIsPinned(false);
+        showToast(errorMessage(error, t("common.somethingWentWrong")));
+      } finally {
+        transferInProgressRef.current = false;
+        setIsSaving(false);
       }
     } else {
       // Pin: create new sticked note entry and proper window
+      if ((window as unknown as { __stikDictationHoldOpen?: boolean }).__stikDictationHoldOpen) {
+        showToast(t("postit.finishDictationBeforeQuit"));
+        return;
+      }
+      transferInProgressRef.current = true;
+      flushSync(() => setIsSaving(true));
       try {
+        // Pinned notes persist plaintext in settings; never copy decrypted
+        // viewing content there implicitly.
+        if (isViewing && originalPath && await invoke<boolean>("is_note_locked", { path: originalPath })) {
+          showToast(t("postit.lockedPinBlocked"));
+          return;
+        }
         const window = getCurrentWindow();
         const position = await window.outerPosition();
         const oldId = currentStickedId || stickedId;
+        const snapshot = getLiveContent();
 
         // Create the sticked note with position and size
         const newNote = await invoke<StickedNote>("create_sticked_note", {
-          content,
+          content: snapshot,
           folder,
           position: [position.x, position.y],
         });
-
-        await clearCurrentSessionDraft();
 
         // If this is a viewing note, close current window and create proper one
         if (isViewing && oldId) {
           // Create the proper sticked window
           await invoke("create_sticked_window", { note: newNote });
+          if (getLiveContent() !== snapshot) return;
           // Close this viewing window
           await invoke("close_sticked_window", { id: oldId });
         } else {
           // Update the tracked ID to the newly created note
           setCurrentStickedId(newNote.id);
+          pinnedClosedRef.current = false;
+          savedDraftPathRef.current = undefined;
           setIsPinned(true);
         }
       } catch (error) {
         console.error("Failed to pin note:", error);
-      }
-    }
-  }, [
-    currentStickedId,
-    stickedId,
-    isPinned,
-    content,
-    folder,
-    isViewing,
-    clearCurrentSessionDraft,
-  ]);
-
-  // Save & Close sticked note (saves content to folder file)
-  // Read from contentRef — React state in the closure can be one render behind
-  // if the user typed and pressed Escape before React flushed.
-  const handleSaveAndCloseSticked = useCallback(async () => {
-    const idToClose = currentStickedId || stickedId;
-    if (!idToClose) return;
-
-    const currentContent = getLiveContent();
-    const shouldSaveContent =
-      !isMarkdownEffectivelyEmpty(currentContent) || (isViewing && originalPath);
-
-    // Only show save animation if there's content
-    if (shouldSaveContent) {
-      setIsSaving(true);
-      try {
-        let savedNotePath: string | undefined;
-
-        // If still pinned, close from sticked notes
-        if (isPinned && currentStickedId) {
-          savedNotePath = await invoke<string>("close_sticked_note", {
-            id: currentStickedId,
-            saveToFolder: true,
-          });
-        } else if (isViewing && originalPath) {
-          // Viewing note - update the existing file
-          await invoke("update_note", {
-            path: originalPath,
-            content: currentContent,
-          });
-          savedNotePath = originalPath;
-        } else {
-          // If unpinned (not viewing), save as new file
-          const result = await invoke<{ path: string }>("save_note", {
-            folder,
-            content: currentContent,
-          });
-          savedNotePath = result.path;
-        }
-
-        // Save cursor position under the file path so Cmd+Shift+L restores it.
-        if (savedNotePath && pendingCursorRef.current) {
-          const { head, anchor } = pendingCursorRef.current;
-          invoke("save_cursor_position", {
-            id: savedNotePath,
-            head,
-            anchor,
-          }).catch(() => {});
-        }
-        await clearCurrentSessionDraft();
-        // Wait for save animation before closing
-        setTimeout(async () => {
-          await invoke("close_sticked_window", { id: idToClose });
-        }, 600);
-      } catch (error) {
-        console.error("Failed to save and close sticked note:", error);
+        showToast(errorMessage(error, t("common.somethingWentWrong")));
+      } finally {
+        transferInProgressRef.current = false;
         setIsSaving(false);
       }
-    } else {
-      // No content, just close without animation
-      try {
-        if (isPinned && currentStickedId) {
-          await invoke("close_sticked_note", {
-            id: currentStickedId,
-            saveToFolder: false,
-          });
-        }
-        await invoke("close_sticked_window", { id: idToClose });
-      } catch (error) {
-        console.error("Failed to close sticked note:", error);
-      }
     }
-  }, [
-    stickedId,
-    currentStickedId,
-    isPinned,
-    isViewing,
-    originalPath,
-    folder,
-    getLiveContent,
-    clearCurrentSessionDraft,
-  ]);
+  }, [currentStickedId, stickedId, isPinned, content, folder, isViewing, originalPath, isSaving, persistDraft, getLiveContent, showToast, t]);
 
   // Close without saving
   const handleCloseWithoutSaving = useCallback(async () => {
     const idToClose = currentStickedId || stickedId;
+    if (!idToClose) return;
 
     try {
-      await clearCurrentSessionDraft();
       if (isPinned && currentStickedId) {
         await invoke("close_sticked_note", {
           id: currentStickedId,
           saveToFolder: false,
         });
       }
-      if (idToClose) {
-        await invoke("close_sticked_window", { id: idToClose });
-      } else {
-        await onClose();
-      }
-      rotateNewSessionDraftId();
+      await invoke("close_sticked_window", { id: idToClose });
     } catch (error) {
       console.error("Failed to close sticked note:", error);
+      showToast(errorMessage(error, t("common.somethingWentWrong")));
     }
-  }, [
-    stickedId,
-    currentStickedId,
-    isPinned,
-    onClose,
-    clearCurrentSessionDraft,
-    rotateNewSessionDraftId,
-  ]);
+  }, [stickedId, currentStickedId, isPinned, showToast, t]);
 
   const handleContentChange = useCallback(
     (newContent: string) => {
@@ -1305,62 +1299,18 @@ export default function PostIt({
     editorRef.current?.focus();
   }, []);
 
-  const runVimSaveAndClose = useCallback(() => {
-    const currentContent = getLiveContent();
-    const shouldSaveContent =
-      !isMarkdownEffectivelyEmpty(currentContent) ||
-      activeSessionDraftKind === "edit" ||
-      (isViewing && !!originalPath);
-    if (shouldSaveContent) {
-      if (isSticked) {
-        void handleSaveAndCloseSticked();
-      } else {
-        void handleSaveAndClose();
-      }
-    } else if (isSticked) {
-      void handleCloseWithoutSaving();
-    } else {
-      void onClose();
-    }
-  }, [
-    isSticked,
-    handleSaveAndCloseSticked,
-    handleSaveAndClose,
-    handleCloseWithoutSaving,
-    onClose,
-    getLiveContent,
-    activeSessionDraftKind,
-    isViewing,
-    originalPath,
-  ]);
-
   const runVimDiscardAndClose = useCallback(() => {
-    setContent("");
-    contentRef.current = "";
-    onContentChange?.("");
-    setShowPicker(false);
-    editorRef.current?.clear();
+    clearCapture();
     editorRef.current?.setVimMode("normal");
     setVimCommand("");
     setVimCommandError("");
 
-    void (async () => {
-      await clearCurrentSessionDraft();
-      rotateNewSessionDraftId();
-      if (isSticked) {
-        await handleCloseWithoutSaving();
-      } else {
-        await onClose();
-      }
-    })();
-  }, [
-    isSticked,
-    handleCloseWithoutSaving,
-    onClose,
-    onContentChange,
-    clearCurrentSessionDraft,
-    rotateNewSessionDraftId,
-  ]);
+    if (isSticked) {
+      void handleCloseWithoutSaving();
+    } else {
+      void onClose();
+    }
+  }, [isSticked, handleCloseWithoutSaving, onClose, clearCapture]);
 
   const executeVimCommand = useCallback(
     (cmd: string) => {
@@ -1369,7 +1319,7 @@ export default function PostIt({
       switch (trimmed) {
         case "wq":
         case "x": // save and close
-          runVimSaveAndClose();
+          void handleSaveAndClose();
           break;
         case "q!": // discard and close (no save)
           runVimDiscardAndClose();
@@ -1382,7 +1332,7 @@ export default function PostIt({
       setVimCommand("");
       setVimCommandError("");
     },
-    [runVimSaveAndClose, runVimDiscardAndClose],
+    [handleSaveAndClose, runVimDiscardAndClose],
   );
 
   // Focus command input when command mode opens
@@ -1443,20 +1393,11 @@ export default function PostIt({
         setContent("");
         onContentChange?.("");
         editorRef.current?.clear();
-        contentRef.current = "";
-        void clearCurrentSessionDraft();
-        rotateNewSessionDraftId();
       }
 
       editorRef.current?.focus();
     },
-    [
-      onFolderChange,
-      content,
-      onContentChange,
-      clearCurrentSessionDraft,
-      rotateNewSessionDraftId,
-    ],
+    [onFolderChange, content, onContentChange],
   );
 
   const startDrag = useCallback(async (e: React.MouseEvent) => {
@@ -1628,6 +1569,7 @@ export default function PostIt({
         const width = size.width / scaleFactor;
         const height = size.height / scaleFactor;
 
+        if (finalizedSessionDraftIdsRef.current.has(activeSessionDraftId)) return;
         await invoke("upsert_session_draft", {
           draft: {
             id: activeSessionDraftId,
@@ -1663,29 +1605,18 @@ export default function PostIt({
     getLiveContent,
   ]);
 
-  // Autosave content for pinned sticked notes (prevents content loss on quit)
+  // Pinned autosave shares the serialized write used by explicit save and quit.
   useEffect(() => {
-    if (!isSticked || !currentStickedId || !isPinned) return;
+    if (!isSticked || !currentStickedId || !isPinned || isSaving || pinnedClosedRef.current) return;
 
-    const timer = setTimeout(async () => {
-      try {
-        await invoke("update_sticked_note", {
-          id: currentStickedId,
-          content,
-          folder: null,
-          position: null,
-          size: null,
-        });
-      } catch (error) {
-        console.error("Failed to autosave content:", error);
-      }
+    autosaveTimerRef.current = setTimeout(() => {
+      void persistDraft().catch((error) => setToast(errorMessage(error, t("postit.saveFailed"))));
     }, 1000);
 
-    return () => clearTimeout(timer);
-  }, [isSticked, currentStickedId, isPinned, content]);
+    return () => { if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current); };
+  }, [isSticked, currentStickedId, isPinned, content, isSaving, persistDraft, t]);
 
-  // Folder suggestion (capture mode only, debounced 1.5s). Backed by note
-  // embeddings, not the AI assistant.
+  // Folder suggestion (capture mode only, debounced 1.5s)
   useEffect(() => {
     if (!capabilities.semantic_search || isSticked || content.length < 30) {
       setSuggestedFolder(null);
@@ -1778,21 +1709,10 @@ export default function PostIt({
     [folder],
   );
 
-  const handleImagePreview = useCallback(
-    async ({ src, alt }: ImagePreviewPayload) => {
-      try {
-        await invoke("preview_image", { src, alt });
-      } catch (err) {
-        console.error("Failed to preview image:", err);
-      }
-    },
-    [],
-  );
-
-  // Show save animation
-  if (isSaving) {
-    return (
-      <div className="w-full h-full flex items-center justify-center bg-bg rounded-[14px]">
+  // Keep the editor mounted so a failed write retains its document and undo
+  // history. Only announce Saved after durable storage has acknowledged it.
+  const savedOverlay = saveComplete ? (
+      <div className="fixed inset-0 z-[240] flex items-center justify-center bg-bg rounded-[14px]" role="status">
         <div className="flex flex-col items-center gap-3">
           <svg
             className="save-checkmark text-coral"
@@ -1819,17 +1739,17 @@ export default function PostIt({
               d="M15 26l7 7 15-15"
             />
           </svg>
-          <p className="save-text text-coral font-semibold text-sm">
-            {t("postit.saved")}
-          </p>
+          <p className="save-text text-coral font-semibold text-sm">{t("common.saved")}</p>
         </div>
       </div>
-    );
-  }
+    ) : null;
 
   return (
     <>
+      {savedOverlay}
       <div
+        inert={isSaving}
+        aria-busy={isSaving}
         className={`w-full h-full rounded-[14px] overflow-hidden flex flex-col ${
           isSticked && isPinned ? "sticked-note" : ""
         } ${zenMode ? "zen-mode" : ""}`}
@@ -1846,7 +1766,7 @@ export default function PostIt({
             <>
               <div className="flex items-center gap-2">
                 {/* Pin button */}
-                {!isSticked && !isRecoveredSessionDraft ? (
+                {!isSticked ? (
                   // Capture mode: pin to create sticked note
                   <button
                     data-capture-hide
@@ -1858,6 +1778,7 @@ export default function PostIt({
                         : "text-stone/50 cursor-not-allowed"
                     }`}
                     title={t("postit.pinToScreen")}
+                    aria-label={t("postit.pinToScreen")}
                   >
                     <svg
                       width="14"
@@ -1873,7 +1794,7 @@ export default function PostIt({
                       <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
                     </svg>
                   </button>
-                ) : isSticked ? (
+                ) : (
                   // Sticked mode: toggle pin state
                   <button
                     data-capture-hide
@@ -1885,8 +1806,11 @@ export default function PostIt({
                     }`}
                     title={
                       isPinned
-                        ? "Unpin (won't restore on restart)"
-                        : "Pin (will restore on restart)"
+                        ? t("postit.unpinHint")
+                        : t("postit.pinHint")
+                    }
+                    aria-label={
+                      isPinned ? t("postit.unpinHint") : t("postit.pinHint")
                     }
                   >
                     <svg
@@ -1903,7 +1827,7 @@ export default function PostIt({
                       <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
                     </svg>
                   </button>
-                ) : null}
+                )}
 
                 <button
                   onClick={() => setShowPicker(!showPicker)}
@@ -1930,7 +1854,7 @@ export default function PostIt({
                       onFolderChange(suggestedFolder);
                       setSuggestedFolder(null);
                     }}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded-pill text-[10px] font-medium bg-coral/10 text-coral hover:bg-coral/20 transition-colors"
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-pill text-[10px] font-medium bg-coral-light text-coral hover:bg-coral/20 transition-colors"
                   >
                     <span>→</span>
                     <span>{suggestedFolder}?</span>
@@ -1945,13 +1869,17 @@ export default function PostIt({
                 <div className="relative" ref={copyMenuRef}>
                   {!(isCopying && copyMode === "image") && (
                     <button
+                      type="button"
                       onClick={() => setIsCopyMenuOpen((open) => !open)}
-                      className={`p-1 rounded-md transition-colors ${
+                      className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
                         isCopyMenuOpen
                           ? "text-coral bg-coral-light"
                           : "text-stone hover:bg-line hover:text-ink"
                       }`}
                       title={t("postit.actions")}
+                      aria-label={t("postit.actions")}
+                      aria-haspopup="menu"
+                      aria-expanded={isCopyMenuOpen}
                     >
                       <svg
                         width="14"
@@ -1968,50 +1896,59 @@ export default function PostIt({
                   )}
 
                   {isCopyMenuOpen && (
-                    <div className="absolute top-full right-0 mt-1 w-40 rounded-lg border border-line bg-bg shadow-stik overflow-hidden z-[240]">
+                    <div role="menu" aria-label={t("postit.actions")} className="absolute top-full right-0 mt-1 w-40 rounded-lg border border-line bg-bg shadow-stik overflow-hidden z-[240]">
                       <button
+                        type="button"
+                        role="menuitem"
                         onClick={() => void handleCopy("rich")}
                         className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
                       >
-                        Copy as rich text
+                        {t("postit.copyRichText")}
                       </button>
                       <button
+                        type="button"
+                        role="menuitem"
                         onClick={() => void handleCopy("markdown")}
                         className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
                       >
-                        Copy as markdown
+                        {t("postit.copyMarkdown")}
                       </button>
                       {capabilities.image_copy && (
-                        <button
-                          onClick={() => void handleCopy("image")}
-                          className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
-                        >
-                          Copy as image
-                        </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => void handleCopy("image")}
+                        className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
+                      >
+                        {t("postit.copyImage")}
+                      </button>
                       )}
                       <div className="border-t border-line" />
                       {capabilities.apple_notes && (
-                        <button
-                          onClick={async () => {
-                            setIsCopyMenuOpen(false);
-                            try {
-                              await invoke("show_apple_notes_picker_cmd");
-                            } catch (err) {
-                              console.error(
-                                "Failed to open Apple Notes picker:",
-                                err,
-                              );
-                            }
-                          }}
-                          className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
-                        >
-                          Import from Apple Notes
-                        </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={async () => {
+                          setIsCopyMenuOpen(false);
+                          try {
+                            await invoke("show_apple_notes_picker_cmd");
+                          } catch (err) {
+                            console.error(
+                              "Failed to open Apple Notes picker:",
+                              err,
+                            );
+                          }
+                        }}
+                        className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
+                      >
+                        {t("postit.importAppleNotes")}
+                      </button>
                       )}
                     </div>
                   )}
                 </div>
 
+                {capabilities.dictation && (
                 <SpeechButton
                   ref={speechRef}
                   activeModel={dictationActiveModel}
@@ -2030,18 +1967,13 @@ export default function PostIt({
                         dictation: {
                           active_model: modelId,
                           active_language: lang,
-                          chinese_script:
-                            current.dictation?.chinese_script ??
-                            dictationChineseScript,
                           enabled: current.dictation?.enabled ?? true,
+                          chinese_script: dictationChineseScript,
                         },
                       };
                       await invoke("save_settings", { settings: next });
                       setDictationActiveModel(modelId);
                       setDictationLanguage(lang);
-                      setDictationChineseScript(
-                        next.dictation?.chinese_script ?? "simplified",
-                      );
                       await getCurrentWindow().emit("settings-changed", next);
                     } catch (e) {
                       console.error("Failed to persist dictation choice:", e);
@@ -2086,18 +2018,19 @@ export default function PostIt({
                     speechPartialLenRef.current = 0;
                   }}
                 />
+                )}
 
                 {capabilities.ai_assistant && (
-                  <AiMenu
-                    content={content}
-                    folder={folder}
-                    onApplyText={(text) => {
-                      editorRef.current?.setContent(text);
-                      setContent(text);
-                    }}
-                    onShowToast={(msg) => setToast(msg)}
-                    disabled={!hasMeaningfulContent}
-                  />
+                <AiMenu
+                  content={content}
+                  folder={folder}
+                  onApplyText={(text) => {
+                    editorRef.current?.setContent(text);
+                    setContent(text);
+                  }}
+                  onShowToast={(msg) => setToast(msg)}
+                  disabled={!hasMeaningfulContent}
+                />
                 )}
 
                 {isSticked && isPinned ? (
@@ -2107,10 +2040,10 @@ export default function PostIt({
                       className="px-2 py-1 rounded-md hover:bg-line text-stone hover:text-ink transition-colors text-[10px]"
                       title={t("postit.closeWithoutSaving")}
                     >
-                      Close
+                      {t("common.close")}
                     </button>
                     <button
-                      onClick={handleSaveAndCloseSticked}
+                      onClick={handleSaveAndClose}
                       disabled={!hasMeaningfulContent}
                       className={`px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors ${
                         hasMeaningfulContent
@@ -2119,20 +2052,20 @@ export default function PostIt({
                       }`}
                       title={
                         hasMeaningfulContent
-                          ? "Save to folder and close"
-                          : "Nothing to save"
+                          ? t("postit.saveToFolder")
+                          : t("postit.nothingToSave")
                       }
                     >
-                      Save
+                      {t("common.save")}
                     </button>
                   </div>
                 ) : isSticked ? (
                   <button
-                    onClick={handleSaveAndCloseSticked}
+                    onClick={handleSaveAndClose}
                     className="px-2.5 py-1.5 bg-coral-light text-coral rounded-lg text-[10px] font-semibold hover:bg-coral hover:text-white transition-colors cursor-pointer"
                     title={t("postit.saveAndClose")}
                   >
-                    esc
+                    {t("common.esc")}
                   </button>
                 ) : (
                   <button
@@ -2140,7 +2073,7 @@ export default function PostIt({
                     className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold transition-colors bg-coral-light text-coral hover:bg-coral hover:text-white cursor-pointer"
                     title={t("postit.saveAndClose")}
                   >
-                    esc
+                    {t("common.esc")}
                   </button>
                 )}
               </div>
@@ -2164,13 +2097,21 @@ export default function PostIt({
               key={`${vimEnabled ? "vim" : "novim"}-${textDirection}`}
               ref={editorRef}
               onChange={handleContentChange}
-              placeholder={isSticked ? "Sticked note..." : "Type a thought..."}
-              initialContent={resolvedInitialContent || initialContent}
+              placeholder={
+                // Zen mode is meant to be empty — the hint is chrome (#94).
+                zenMode
+                  ? ""
+                  : isSticked
+                    ? t("postit.stickedPlaceholder")
+                    : t("postit.typePlaceholder")
+              }
+              initialContent={resolvedInitialContent}
               vimEnabled={vimEnabled}
               showFormatToolbar={zenMode ? false : formatToolbar}
               textDirection={textDirection}
+              loadRemoteImages={loadRemoteImages}
               onVimModeChange={setVimMode}
-              onVimSaveAndClose={runVimSaveAndClose}
+              onVimSaveAndClose={handleSaveAndClose}
               onVimCloseWithoutSaving={runVimDiscardAndClose}
               onImagePaste={handleImagePaste}
               onImageDropPath={handleImageDropPath}
@@ -2215,6 +2156,7 @@ export default function PostIt({
                 <input
                   ref={commandInputRef}
                   type="text"
+                  aria-label={t("postit.vimCommandLabel")}
                   value={vimCommand}
                   onChange={(e) => {
                     setVimCommand(e.target.value);
@@ -2232,7 +2174,7 @@ export default function PostIt({
                       dismissCommandBar();
                     }
                   }}
-                  className="flex-1 bg-transparent text-[13px] font-mono text-ink outline-none placeholder:text-stone/50"
+                  className="flex-1 bg-transparent text-[13px] font-mono text-ink outline-none focus-visible:ring-2 focus-visible:ring-coral focus-visible:rounded-sm placeholder:text-stone/50"
                   placeholder="wq  q!"
                   spellCheck={false}
                   autoComplete="off"
@@ -2270,13 +2212,11 @@ export default function PostIt({
                   </span>
                 ) : isSticked && !isPinned && !isViewing ? (
                   <span className="text-stone">
-                    <span className="text-amber-500">○</span>{" "}
-                    {t("postit.status.unpinned")}
+                    <span className="text-amber-500">○</span>  {t("postit.unpinned")}
                   </span>
                 ) : (
                   <span className="text-stone">
-                    <span className="text-coral">✦</span>{" "}
-                    {t("postit.status.markdown")}
+                    <span className="text-coral">✦</span>  {t("postit.markdownSupported")}
                   </span>
                 )}
                 {(onOpenSettings || isSticked) && (
@@ -2300,8 +2240,8 @@ export default function PostIt({
                         }`}
                         title={
                           formatToolbar
-                            ? t("postit.toolbar.hideFormatButtons")
-                            : t("postit.toolbar.showFormatButtons")
+                            ? t("postit.hideFormatButtons")
+                            : t("postit.showFormatButtons")
                         }
                       >
                         <svg
@@ -2323,7 +2263,7 @@ export default function PostIt({
                     <button
                       onClick={() => invoke("open_command_palette")}
                       className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-line text-stone hover:text-ink transition-colors"
-                      title={`${t("postit.toolbar.commandPalette")} (${formatShortcutDisplay(systemShortcuts.search || "Cmd+Shift+P")})`}
+                      title={`${t("postit.commandPalette")} (${formatShortcutDisplay(systemShortcuts.search || "Cmd+Shift+P")})`}
                     >
                       <svg
                         width="14"
@@ -2344,7 +2284,7 @@ export default function PostIt({
                         isSticked ? invoke("open_settings") : onOpenSettings?.()
                       }
                       className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-line text-stone hover:text-ink transition-colors"
-                      title={`${t("postit.toolbar.settings")} (${formatShortcutDisplay(systemShortcuts.settings || "Cmd+Shift+Comma")})`}
+                      title={`Settings (${formatShortcutDisplay(systemShortcuts.settings || "Cmd+Shift+Comma")})`}
                     >
                       <svg
                         width="14"

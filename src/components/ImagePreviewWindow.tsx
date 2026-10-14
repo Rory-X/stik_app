@@ -9,9 +9,11 @@ import {
   stepImagePreviewZoom,
 } from "@/utils/imagePreviewZoom";
 import { useI18n } from "@/i18n/react";
+import { usePlatformCapabilities } from "@/hooks/usePlatformCapabilities";
 
 export default function ImagePreviewWindow() {
   const { t } = useI18n();
+  const capabilities = usePlatformCapabilities();
   const [image, setImage] = useState<ImagePreviewPayload | null>(null);
   const [failed, setFailed] = useState(false);
   const [zoom, setZoom] = useState(1);
@@ -279,7 +281,7 @@ export default function ImagePreviewWindow() {
         )}
       </div>
 
-      {contextMenu && image && !failed && (
+      {capabilities.image_copy && contextMenu && image && !failed && (
         <div
           className="image-preview-context-menu fixed z-50 min-w-36 rounded-md border border-line bg-surface shadow-xl p-1"
           style={{ left: contextMenu.x, top: contextMenu.y }}

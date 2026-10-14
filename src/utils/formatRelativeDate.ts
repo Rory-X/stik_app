@@ -1,3 +1,5 @@
+import { getLocale } from "@/i18n";
+
 /**
  * Convert a Stik filename-derived date string (YYYYMMDD-HHMMSS) into a
  * human-friendly relative label: "Just now", "5 min ago", "2 hours ago",
@@ -5,7 +7,7 @@
  */
 export function formatRelativeDate(
   created: string,
-  locale: "en" | "zh-CN" = "en",
+  locale: "en" | "zh-CN" = getLocale(),
   now: Date = new Date(),
 ): string {
   const match = created.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/);

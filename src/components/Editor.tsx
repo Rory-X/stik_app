@@ -1,8 +1,5 @@
 /**
  * CodeMirror 6 editor for Stik — raw markdown editing with syntax highlighting.
- *
- * Same EditorRef/EditorProps interface as the old TipTap editor so PostIt.tsx
- * can swap in with minimal changes.
  */
 
 import {
@@ -12,16 +9,15 @@ import {
   useRef,
   useCallback,
 } from "react";
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import {
   EditorView,
   drawSelection,
   keymap,
-  placeholder as cmPlaceholder,
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab, insertNewline } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { syntaxTree } from "@codemirror/language";
+import { syntaxTree, type LanguageDescription } from "@codemirror/language";
 import { autocompletion, closeCompletion, completionStatus } from "@codemirror/autocomplete";
 import { search, searchKeymap } from "@codemirror/search";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -40,7 +36,11 @@ import {
   wikiLinkCompletionSource,
 } from "@/extensions/cm-wiki-link";
 import { slashCommandCompletionSource } from "@/extensions/cm-slash-commands";
-import { blockWidgetPlugin } from "@/extensions/cm-block-widgets";
+import {
+  blockWidgetPlugin,
+  remoteImagesAllowed,
+  refreshBlockWidgetLabels,
+} from "@/extensions/cm-block-widgets";
 import { bidiSupport } from "@/extensions/cm-bidi";
 import {
   createVimExtension,
@@ -55,8 +55,7 @@ import { highlightExtension } from "@/extensions/cm-highlight";
 import { taskCheckboxPlugin, taskCheckboxHandler } from "@/extensions/cm-task-toggle";
 import { hideMarkersPlugin, autoCloseMarkup } from "@/extensions/cm-hide-markers";
 import { headingFoldPlugin } from "@/extensions/cm-heading-fold";
-import { codeBlockLanguage } from "@/extensions/cm-code-languages";
-import { buildCodeBlockPasteSpec } from "@/extensions/cm-code-block";
+import { accessibleEditor, refreshTaskAndFoldLabels } from "@/extensions/cm-a11y";
 import { filenameToSlug } from "@/utils/wikiLink";
 import { normalizeUrl } from "@/utils/normalizeUrl";
 import { isImageUrl } from "@/utils/isImageUrl";
@@ -67,14 +66,13 @@ import {
   shouldShowCmdLinkCursor,
 } from "@/utils/externalLinkHitTest";
 import { markdownToHtml, markdownToPlainText } from "@/utils/markdownToHtml";
-import { createVimCommandCallbacks } from "@/utils/vimCommandBridge";
-import {
-  IMAGE_PREVIEW_REQUEST_EVENT,
-  type ImagePreviewPayload,
-} from "@/utils/imagePreviewEvent";
+import { IMAGE_PREVIEW_REQUEST_EVENT, type ImagePreviewPayload } from "@/utils/imagePreviewEvent";
+import { buildCodeBlockPasteSpec } from "@/extensions/cm-code-block";
+import { hasNamedFencedCodeBlock } from "@/utils/fencedCodeLanguage";
 import FormattingToolbar from "@/components/FormattingToolbar";
 import LinkPopover from "@/components/LinkPopover";
 import type { SearchResult } from "@/types";
+import { useTranslation } from "@/hooks/useTranslation";
 
 export { type VimMode } from "@/extensions/cm-vim";
 
@@ -85,6 +83,7 @@ interface EditorProps {
   vimEnabled?: boolean;
   showFormatToolbar?: boolean;
   textDirection?: "auto" | "ltr" | "rtl";
+  loadRemoteImages?: boolean;
   onVimModeChange?: (mode: VimMode) => void;
   onVimSaveAndClose?: () => void;
   onVimCloseWithoutSaving?: () => void;
@@ -109,6 +108,38 @@ export interface EditorRef {
   getFormatState: () => FormatState;
 }
 
+/// The placeholder lives in its own compartment: the editor is created once
+/// with `[]` deps, so a plain `placeholder(...)` extension freezes whatever
+/// string was current at mount. Switching language then left the old text in
+/// place until the window was recreated.
+const placeholderCompartment = new Compartment();
+const remoteImagesCompartment = new Compartment();
+const markdownCompartment = new Compartment();
+
+function createMarkdownSupport(
+  codeLanguages: readonly LanguageDescription[],
+) {
+  return markdown({
+    base: markdownLanguage,
+    codeLanguages,
+    // Disable setext headings (text\n--- = H2) — they cause jarring
+    // style jumps while typing list markers like "-" on a new line.
+    // ATX headings (# H1, ## H2) are sufficient.
+    extensions: [
+      highlightExtension,
+      {
+        parseBlock: [
+          {
+            name: "SetextHeading",
+            parse: () => false,
+            leaf: () => null,
+          },
+        ],
+      },
+    ],
+  });
+}
+
 const Editor = forwardRef<EditorRef, EditorProps>(
   (
     {
@@ -118,6 +149,7 @@ const Editor = forwardRef<EditorRef, EditorProps>(
       vimEnabled,
       showFormatToolbar,
       textDirection = "auto",
+      loadRemoteImages = false,
       onVimModeChange,
       onVimSaveAndClose,
       onVimCloseWithoutSaving,
@@ -129,6 +161,15 @@ const Editor = forwardRef<EditorRef, EditorProps>(
     },
     ref
   ) => {
+    // Subscribing to the locale is what makes this component re-render when
+    // the language changes; the module-level `t` alone would not.
+    const { t: translate, locale } = useTranslation();
+    // `??` rather than `||`: an explicitly empty placeholder means draw
+    // nothing (Zen mode), where undefined means "use the default".
+    const placeholderText = placeholder ?? translate("editor.startTyping");
+    // Never empty — this is the editor's accessible name, not its hint.
+    const accessibleName = placeholderText || translate("editor.startTyping");
+
     const containerRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const formatStateRef = useRef<FormatState>({
@@ -216,6 +257,7 @@ const Editor = forwardRef<EditorRef, EditorProps>(
                   view.dispatch({
                     changes: { from: head + 2, insert: "\n" },
                     selection: { anchor: head + 2 + 1 },
+                    userEvent: "input",
                   });
                   return true;
                 }
@@ -496,10 +538,48 @@ const Editor = forwardRef<EditorRef, EditorProps>(
         }
       });
 
+      let languageDataRequested = false;
+      let firstInputRecorded = false;
+      const loadCodeLanguagesIfNeeded = (
+        markdownText: string,
+        targetView: EditorView,
+      ) => {
+        if (
+          languageDataRequested ||
+          !hasNamedFencedCodeBlock(markdownText)
+        ) {
+          return;
+        }
+        languageDataRequested = true;
+        void import("@codemirror/language-data")
+          .then(({ languages }) => {
+            if (viewRef.current !== targetView) return;
+            targetView.dispatch({
+              effects: markdownCompartment.reconfigure(
+                createMarkdownSupport(languages),
+              ),
+            });
+          })
+          .catch((error) => {
+            console.error("Failed to load fenced-code languages:", error);
+          });
+      };
+
       // Doc change listener
       const docChangeListener = EditorView.updateListener.of((update) => {
         if (update.docChanged) {
-          onChangeRef.current(update.state.doc.toString());
+          if (
+            !firstInputRecorded &&
+            update.transactions.some((transaction) =>
+              transaction.isUserEvent("input"),
+            )
+          ) {
+            firstInputRecorded = true;
+            globalThis.performance?.mark?.("stik:first-editor-input");
+          }
+          const markdownText = update.state.doc.toString();
+          onChangeRef.current(markdownText);
+          loadCodeLanguagesIfNeeded(markdownText, update.view);
         }
       });
 
@@ -508,30 +588,16 @@ const Editor = forwardRef<EditorRef, EditorProps>(
         history(),
         formatKeybindings,
         keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
-        markdown({
-          base: markdownLanguage,
-          codeLanguages: codeBlockLanguage,
-          // Disable setext headings (text\n--- = H2) — they cause jarring
-          // style jumps while typing list markers like "-" on a new line.
-          // ATX headings (# H1, ## H2) are sufficient.
-          extensions: [
-            highlightExtension,
-            {
-              parseBlock: [{
-                name: "SetextHeading",
-                parse: () => false,
-                leaf: () => null,
-              }],
-            },
-          ],
-        }),
+        markdownCompartment.of(createMarkdownSupport([])),
         stikEditorTheme,
         stikHighlightStyle,
         // Required for Vim visual mode highlight:
         // @replit/codemirror-vim makes native ::selection transparent.
         // drawSelection renders .cm-selectionBackground instead.
         drawSelection(),
-        cmPlaceholder(placeholder || "Start typing..."),
+        placeholderCompartment.of(
+          accessibleEditor(placeholderText, accessibleName),
+        ),
         search(),
         richCopyHandler,
         imageHandlers,
@@ -543,6 +609,7 @@ const Editor = forwardRef<EditorRef, EditorProps>(
         taskCheckboxHandler,
         hideMarkersPlugin,
         blockWidgetPlugin,
+        remoteImagesCompartment.of(remoteImagesAllowed.of(loadRemoteImages)),
         headingFoldPlugin,
         autoCloseMarkup,
         formatStateListener,
@@ -572,24 +639,19 @@ const Editor = forwardRef<EditorRef, EditorProps>(
       });
 
       viewRef.current = view;
+      globalThis.performance?.mark?.("stik:editor-ready");
+      loadCodeLanguagesIfNeeded(view.state.doc.toString(), view);
 
       // Setup vim mode listener after view is created
       if (vimEnabled) {
         setupVimModeListener(view, (mode) => {
-          if (mode === "normal") {
-            // Check if the vim status shows ":" command
-            // The vim plugin handles command mode internally
-          }
           onVimModeChangeRef.current?.(mode);
         });
 
-        registerVimCommands(
-          createVimCommandCallbacks({
-            onSaveAndClose: () => onVimSaveAndCloseRef.current?.(),
-            onCloseWithoutSaving: () => onVimCloseWithoutSavingRef.current?.(),
-            onModeChange: (mode: VimMode) => onVimModeChangeRef.current?.(mode),
-          })
-        );
+        registerVimCommands({
+          onSaveAndClose: () => onVimSaveAndCloseRef.current?.(),
+          onCloseWithoutSaving: () => onVimCloseWithoutSavingRef.current?.(),
+        });
       }
 
       return () => {
@@ -598,6 +660,38 @@ const Editor = forwardRef<EditorRef, EditorProps>(
       };
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
     // ^ Intentionally empty deps: CM view is created once per mount.
+
+    // Swap the placeholder in place when it changes — which it does on every
+    // language switch. Without this the editor keeps the string it was built
+    // with, so changing language left the old placeholder until restart.
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({
+        effects: placeholderCompartment.reconfigure(
+          accessibleEditor(placeholderText, accessibleName),
+        ),
+      });
+    }, [placeholderText, accessibleName]);
+
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      // Widgets are cached independently of React. Change labels, not their DOM
+      // identity: rebuilding would lose table focus and one-time image consent.
+      refreshTaskAndFoldLabels(view.dom);
+      refreshBlockWidgetLabels(view.dom);
+    }, [locale]);
+
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({
+        effects: remoteImagesCompartment.reconfigure(
+          remoteImagesAllowed.of(loadRemoteImages),
+        ),
+      });
+    }, [loadRemoteImages]);
     // Parent uses key={vimEnabled} to force remount when vim toggled.
 
     useEffect(() => {

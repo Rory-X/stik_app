@@ -13,11 +13,11 @@ import {
 } from "@codemirror/autocomplete";
 import { EditorView } from "@codemirror/view";
 import type { CustomTemplate } from "@/types";
-import type { Locale } from "@/i18n";
+import { getLocale, type Locale, t, type TranslationKey } from "@/i18n";
 
 interface SlashTemplate {
   command: string;
-  badge: string;
+  badgeKey: TranslationKey;
   boost: number;
   insert: () => { text: string; cursor: number | [number, number] };
 }
@@ -38,17 +38,11 @@ export function getSlashCommandNames(): string[] {
 }
 
 /** Resolve dynamic placeholders in template text at insertion time. */
-function resolvePlaceholders(text: string, locale: Locale = slashCommandLocale): string {
+function resolvePlaceholders(text: string, locale: Locale = getLocale()): string {
   const now = new Date();
-  const date = now.toLocaleDateString(locale === "zh-CN" ? "zh-CN" : "en-US", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+  const date = now.toLocaleDateString(locale === "zh-CN" ? "zh-CN" : "en-US", { year: "numeric", month: "long", day: "numeric" });
   const time = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
-  const day = now.toLocaleDateString(locale === "zh-CN" ? "zh-CN" : "en-US", {
-    weekday: "long",
-  });
+  const day = now.toLocaleDateString(locale === "zh-CN" ? "zh-CN" : "en-US", { weekday: "long" });
   const isodate = now.toISOString().slice(0, 10);
 
   return text
@@ -62,56 +56,15 @@ function resolvePlaceholders(text: string, locale: Locale = slashCommandLocale):
 // ── Custom templates (set at runtime from settings) ────────────────
 
 let customTemplates: SlashTemplate[] = [];
-let slashCommandLocale: Locale = "en";
-
-export function setSlashCommandLocale(locale: Locale | null | undefined): void {
-  slashCommandLocale = locale === "zh-CN" ? "zh-CN" : "en";
-}
-
-function isChineseLocale(locale: Locale = slashCommandLocale): boolean {
-  return locale === "zh-CN";
-}
-
-function slashBadge(key: "heading" | "list" | "tasks" | "code" | "quote" | "table" | "link" | "image" | "template" | "custom", locale: Locale = slashCommandLocale): string {
-  if (!isChineseLocale(locale)) {
-    const en: Record<typeof key, string> = {
-      heading: "Heading",
-      list: "List",
-      tasks: "Tasks",
-      code: "Code",
-      quote: "Quote",
-      table: "Table",
-      link: "Link",
-      image: "Image",
-      template: "Template",
-      custom: "Custom",
-    };
-    return en[key];
-  }
-
-  const zh: Record<typeof key, string> = {
-    heading: "标题",
-    list: "列表",
-    tasks: "任务",
-    code: "代码",
-    quote: "引用",
-    table: "表格",
-    link: "链接",
-    image: "图片",
-    template: "模板",
-    custom: "自定义",
-  };
-  return zh[key];
-}
 
 /** Convert user-defined templates into SlashTemplates with {{cursor}} support. */
 export function setCustomTemplates(templates: CustomTemplate[]): void {
-  customTemplates = templates.map((t) => ({
-    command: t.name,
-    badge: slashBadge("custom"),
+  customTemplates = templates.map((tpl) => ({
+    command: tpl.name,
+    badgeKey: "slash.custom",
     boost: -1,
     insert: () => {
-      const resolved = resolvePlaceholders(t.body, slashCommandLocale);
+      const resolved = resolvePlaceholders(tpl.body);
       const idx = resolved.indexOf("{{cursor}}");
       if (idx >= 0) {
         return { text: resolved.replace("{{cursor}}", ""), cursor: idx };
@@ -123,66 +76,66 @@ export function setCustomTemplates(templates: CustomTemplate[]): void {
 
 // ── Built-in templates ─────────────────────────────────────────────
 
-function builtinTemplates(locale: Locale = slashCommandLocale): SlashTemplate[] {
-  const zh = isChineseLocale(locale);
+function builtinTemplates(locale: Locale = getLocale()): SlashTemplate[] {
+  const zh = locale === "zh-CN";
   return [
   {
     command: "h1",
-    badge: slashBadge("heading", locale),
+    badgeKey: "slash.heading",
     boost: 0,
     insert: () => ({ text: "# ", cursor: 2 }),
   },
   {
     command: "h2",
-    badge: slashBadge("heading", locale),
+    badgeKey: "slash.heading",
     boost: 0,
     insert: () => ({ text: "## ", cursor: 3 }),
   },
   {
     command: "h3",
-    badge: slashBadge("heading", locale),
+    badgeKey: "slash.heading",
     boost: 0,
     insert: () => ({ text: "### ", cursor: 4 }),
   },
   {
     command: "list",
-    badge: slashBadge("list", locale),
+    badgeKey: "slash.list",
     boost: 0,
     insert: () => ({ text: "- \n- \n- ", cursor: 2 }),
   },
   {
     command: "numbered",
-    badge: slashBadge("list", locale),
+    badgeKey: "slash.list",
     boost: 0,
     insert: () => ({ text: "1. \n2. \n3. ", cursor: 3 }),
   },
   {
     command: "todo",
-    badge: slashBadge("tasks", locale),
+    badgeKey: "slash.tasks",
     boost: 0,
     insert: () => ({ text: "- [ ] \n- [ ] \n- [ ] ", cursor: 6 }),
   },
   {
     command: "divider",
-    badge: "---",
+    badgeKey: "slash.divider",
     boost: 0,
     insert: () => ({ text: "---\n", cursor: 4 }),
   },
   {
     command: "code",
-    badge: slashBadge("code", locale),
+    badgeKey: "slash.code",
     boost: 0,
     insert: () => ({ text: "```\n\n```", cursor: 4 }),
   },
   {
     command: "quote",
-    badge: slashBadge("quote", locale),
+    badgeKey: "slash.quote",
     boost: 0,
     insert: () => ({ text: "> ", cursor: 2 }),
   },
   {
     command: "table",
-    badge: slashBadge("table", locale),
+    badgeKey: "slash.table",
     boost: 0,
     insert: () => ({
       text: zh
@@ -193,7 +146,7 @@ function builtinTemplates(locale: Locale = slashCommandLocale): SlashTemplate[] 
   },
   {
     command: "link",
-    badge: slashBadge("link", locale),
+    badgeKey: "slash.link",
     boost: 0,
     insert: () =>
       zh
@@ -202,7 +155,7 @@ function builtinTemplates(locale: Locale = slashCommandLocale): SlashTemplate[] 
   },
   {
     command: "image",
-    badge: slashBadge("image", locale),
+    badgeKey: "slash.image",
     boost: 0,
     insert: () =>
       zh
@@ -213,7 +166,7 @@ function builtinTemplates(locale: Locale = slashCommandLocale): SlashTemplate[] 
   // ── Note templates ──────────────────────────────────────────────
   {
     command: "meeting",
-    badge: slashBadge("template", locale),
+    badgeKey: "slash.template",
     boost: -1,
     insert: () => {
       const text = resolvePlaceholders(
@@ -228,7 +181,7 @@ function builtinTemplates(locale: Locale = slashCommandLocale): SlashTemplate[] 
   },
   {
     command: "standup",
-    badge: slashBadge("template", locale),
+    badgeKey: "slash.template",
     boost: -1,
     insert: () => {
       const text = resolvePlaceholders(
@@ -243,7 +196,7 @@ function builtinTemplates(locale: Locale = slashCommandLocale): SlashTemplate[] 
   },
   {
     command: "journal",
-    badge: slashBadge("template", locale),
+    badgeKey: "slash.template",
     boost: -1,
     insert: () => {
       const text = resolvePlaceholders(
@@ -257,7 +210,7 @@ function builtinTemplates(locale: Locale = slashCommandLocale): SlashTemplate[] 
   },
   {
     command: "brainstorm",
-    badge: slashBadge("template", locale),
+    badgeKey: "slash.template",
     boost: -1,
     insert: () => {
       const text = zh
@@ -269,7 +222,7 @@ function builtinTemplates(locale: Locale = slashCommandLocale): SlashTemplate[] 
   },
   {
     command: "retro",
-    badge: slashBadge("template", locale),
+    badgeKey: "slash.template",
     boost: -1,
     insert: () => {
       const text = resolvePlaceholders(
@@ -284,7 +237,7 @@ function builtinTemplates(locale: Locale = slashCommandLocale): SlashTemplate[] 
   },
   {
     command: "proscons",
-    badge: slashBadge("template", locale),
+    badgeKey: "slash.template",
     boost: -1,
     insert: () => {
       const text = zh
@@ -296,7 +249,7 @@ function builtinTemplates(locale: Locale = slashCommandLocale): SlashTemplate[] 
   },
   {
     command: "weekly",
-    badge: slashBadge("template", locale),
+    badgeKey: "slash.template",
     boost: -1,
     insert: () => {
       const text = resolvePlaceholders(
@@ -333,7 +286,7 @@ export function slashCommandCompletionSource(
   const slashPos = line.from + match[1].length; // position of the "/"
   const typed = textBefore.slice(match[1].length + 1); // chars after "/"
 
-  const allTemplates = [...builtinTemplates(), ...customTemplates];
+  const allTemplates = [...builtinTemplates(getLocale()), ...customTemplates];
 
   // Filter templates by typed prefix
   const filtered = allTemplates.filter((t) =>
@@ -341,12 +294,12 @@ export function slashCommandCompletionSource(
   );
   if (!filtered.length) return null;
 
-  const options: Completion[] = filtered.map((t) => ({
-    label: `/${t.command}`,
-    detail: t.badge,
-    boost: t.boost,
+  const options: Completion[] = filtered.map((tpl) => ({
+    label: `/${tpl.command}`,
+    detail: t(tpl.badgeKey),
+    boost: tpl.boost,
     apply: (view: EditorView, _completion: Completion, from: number, to: number) => {
-      const { text, cursor } = t.insert();
+      const { text, cursor } = tpl.insert();
       const changes = { from, to, insert: text };
 
       if (Array.isArray(cursor)) {

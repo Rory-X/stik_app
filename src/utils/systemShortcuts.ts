@@ -1,3 +1,4 @@
+import type { TranslationKey } from "@/i18n";
 export const SYSTEM_SHORTCUT_ACTIONS = [
   "search",
   "manager",
@@ -21,20 +22,34 @@ export const SYSTEM_SHORTCUT_DEFAULTS: Record<SystemAction, string> = {
   clip_capture: "Cmd+Shift+C",
 };
 
-export const SYSTEM_SHORTCUT_LABELS: Record<SystemAction, string> = {
-  search: "Command Palette",
-  manager: "Command Palette (alt)",
-  settings: "Settings",
-  last_note: "Last note",
-  zen_mode: "Zen mode",
-  dictation: "Toggle dictation (in note)",
-  voice_note: "New voice note",
-  clip_capture: "Capture clipboard",
+export const SYSTEM_SHORTCUT_LABEL_KEYS: Record<SystemAction, TranslationKey> = {
+  search: "shortcut.search",
+  manager: "shortcut.manager",
+  settings: "shortcut.settings",
+  last_note: "shortcut.lastNote",
+  zen_mode: "shortcut.zenMode",
+  dictation: "shortcut.dictation",
+  voice_note: "shortcut.voiceNote",
+  clip_capture: "shortcut.clipCapture",
 };
+
+/**
+ * Settings deliberately cannot be cleared.
+ *
+ * The tray icon and the Dock icon can both be hidden, so if the Settings
+ * shortcut were also unset there would be no way left to reach Settings and
+ * undo any of it. Every other action has a menu or is simply optional.
+ */
+export const UNCLEARABLE_ACTIONS: readonly SystemAction[] = ["settings"];
+
+export function isClearableAction(action: SystemAction): boolean {
+  return !UNCLEARABLE_ACTIONS.includes(action);
+}
 
 /** Get all system shortcut values for use as reserved list */
 export function getSystemShortcutValues(
   systemShortcuts: Record<string, string>,
 ): string[] {
-  return Object.values(systemShortcuts);
+  // Cleared shortcuts are the empty string; they reserve nothing.
+  return Object.values(systemShortcuts).filter((value) => value !== "");
 }

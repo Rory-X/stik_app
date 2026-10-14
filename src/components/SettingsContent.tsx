@@ -18,28 +18,24 @@ import type {
 import { listen } from "@tauri-apps/api/event";
 import { BUILTIN_COMMAND_NAMES } from "@/extensions/cm-slash-commands";
 import ConfirmDialog from "./ConfirmDialog";
+import VaultHealth from "./VaultHealth";
 import {
   SYSTEM_SHORTCUT_ACTIONS,
   SYSTEM_SHORTCUT_DEFAULTS,
+  SYSTEM_SHORTCUT_LABEL_KEYS,
+  isClearableAction,
   type SystemAction,
 } from "@/utils/systemShortcuts";
 import { hexToRgb, rgbToHex } from "@/utils/color";
+import { usePlatformCapabilities } from "@/hooks/usePlatformCapabilities";
+import { useTranslation } from "@/hooks/useTranslation";
+import { LOCALES, t as tGlobal, type TranslationKey } from "@/i18n";
 import { BUILTIN_THEMES, generateThemeId, type BuiltinTheme } from "@/themes";
 import {
   FONTS,
   loadGoogleFont,
   loadCustomFont,
-  fontNameFromPath,
 } from "@/utils/fonts";
-import { useI18n } from "@/i18n/react";
-import type { MessageKey } from "@/i18n";
-import { translateBackendError } from "@/i18n/errors";
-import { usePlatformCapabilities } from "@/hooks/usePlatformCapabilities";
-
-type Translator = (
-  key: MessageKey,
-  replacements?: Record<string, string | number>,
-) => string;
 
 function remoteToWebUrl(remoteUrl: string): string | null {
   const trimmed = remoteUrl.trim();
@@ -64,6 +60,7 @@ interface DropdownProps {
   options: { value: string; label: string }[];
   onChange: (value: string) => void;
   placeholder?: string;
+  ariaLabel?: string;
 }
 
 export function Dropdown({
@@ -71,10 +68,13 @@ export function Dropdown({
   options,
   onChange,
   placeholder,
+  ariaLabel,
 }: DropdownProps) {
-  const { t } = useI18n();
+  const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listboxRef = useRef<HTMLDivElement>(null);
 
   const allOptions = options.some((o) => o.value === value)
     ? options
@@ -95,11 +95,35 @@ export function Dropdown({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    requestAnimationFrame(() => {
+      const selected = listboxRef.current?.querySelector<HTMLElement>(
+        "[role='option'][aria-selected='true']",
+      );
+      const first = listboxRef.current?.querySelector<HTMLElement>(
+        "[role='option']",
+      );
+      (selected ?? first)?.focus();
+    });
+  }, [isOpen]);
+
   return (
     <div ref={dropdownRef} className="relative">
       <button
+        ref={triggerRef}
+        type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full px-3 py-2.5 bg-bg border border-line rounded-lg text-[13px] text-ink text-left flex items-center justify-between hover:border-coral/50 transition-colors"
+        aria-label={ariaLabel ?? placeholder ?? t("common.select")}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            setIsOpen(true);
+          }
+        }}
+        className="w-full px-3 py-2.5 bg-bg border border-line rounded-lg text-[13px] text-ink text-left flex items-center justify-between hover:border-coral/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral"
       >
         <span className={selectedOption ? "text-ink" : "text-stone"}>
           {selectedOption?.label || placeholder || t("common.select")}
@@ -112,15 +136,44 @@ export function Dropdown({
       </button>
 
       {isOpen && (
-        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-bg border border-line rounded-lg shadow-stik overflow-hidden max-h-[220px] overflow-y-auto">
+        <div
+          ref={listboxRef}
+          role="listbox"
+          aria-label={ariaLabel ?? placeholder ?? t("common.select")}
+          onKeyDown={(event) => {
+            const options = Array.from(
+              event.currentTarget.querySelectorAll<HTMLElement>("[role='option']"),
+            );
+            const current = options.indexOf(document.activeElement as HTMLElement);
+            let next: number | null = null;
+            if (event.key === "ArrowDown") next = (current + 1) % options.length;
+            if (event.key === "ArrowUp") next = (current - 1 + options.length) % options.length;
+            if (event.key === "Home") next = 0;
+            if (event.key === "End") next = options.length - 1;
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setIsOpen(false);
+              triggerRef.current?.focus();
+              return;
+            }
+            if (next !== null && options.length) {
+              event.preventDefault();
+              options[next]?.focus();
+            }
+          }}
+          className="absolute z-50 top-full left-0 right-0 mt-1 bg-bg border border-line rounded-lg shadow-stik overflow-hidden max-h-[220px] overflow-y-auto"
+        >
           {allOptions.map((option) => (
             <button
+              type="button"
+              role="option"
+              aria-selected={option.value === value}
               key={option.value}
               onClick={() => {
                 onChange(option.value);
                 setIsOpen(false);
               }}
-              className={`w-full px-3 py-2.5 text-[13px] text-left transition-colors ${
+              className={`w-full min-h-8 px-3 py-2.5 text-[13px] text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-coral ${
                 option.value === value
                   ? "bg-coral text-white"
                   : "text-ink hover:bg-line/50"
@@ -145,6 +198,7 @@ export type SettingsTab =
   | "ai"
   | "dictation"
   | "insights"
+  | "health"
   | "privacy";
 
 interface SettingsContentProps {
@@ -213,7 +267,7 @@ function PrivacySection({
   settings: StikSettings;
   onSettingsChange: (settings: StikSettings) => void;
 }) {
-  const { t } = useI18n();
+  const { t } = useTranslation();
   const capabilities = usePlatformCapabilities();
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -221,13 +275,46 @@ function PrivacySection({
   const [isLockingAll, setIsLockingAll] = useState(false);
 
   const loadDeviceId = useCallback(async () => {
+    if (!settings.analytics_enabled) {
+      setDeviceId(null);
+      return;
+    }
     try {
-      const id = await invoke<string>("get_analytics_device_id");
+      const id = await invoke<string | null>("get_analytics_device_id");
       setDeviceId(id);
     } catch {
       setDeviceId(null);
     }
-  }, []);
+  }, [settings.analytics_enabled]);
+
+  const resetDeviceId = async () => {
+    try {
+      const id = await invoke<string | null>("reset_analytics_device_id");
+      setDeviceId(id);
+      setToast(t("settings.analytics.idReset"));
+    } catch (error) {
+      setToast(String(error));
+    }
+  };
+
+  const setAnalyticsEnabled = async (enabled: boolean) => {
+    onSettingsChange({
+      ...settings,
+      analytics_enabled: enabled,
+      analytics_consent_version: 1,
+      analytics_notice_dismissed: true,
+    });
+    if (!enabled) setDeviceId(null);
+
+    try {
+      await invoke("configure_analytics", { enabled });
+      if (enabled) {
+        setDeviceId(await invoke<string | null>("get_analytics_device_id"));
+      }
+    } catch (error) {
+      setToast(String(error));
+    }
+  };
 
   useEffect(() => {
     loadDeviceId();
@@ -240,16 +327,16 @@ function PrivacySection({
   const copyDeviceId = () => {
     if (!deviceId) return;
     navigator.clipboard.writeText(deviceId);
-    setToast(t("settings.privacy.deviceIdCopied"));
+    setToast(t("settings.deviceIdCopied"));
   };
 
   const handleLockAllNow = async () => {
     setIsLockingAll(true);
     try {
       await invoke("lock_session");
-      setToast(t("settings.privacy.sessionLocked"));
+      setToast(t("settings.lock.sessionLocked"));
     } catch (err) {
-      setToast(translateBackendError(err, t));
+      setToast(String(err));
     } finally {
       setIsLockingAll(false);
     }
@@ -266,9 +353,9 @@ function PrivacySection({
       }
       const key = await invoke<string>("export_recovery_key");
       await navigator.clipboard.writeText(key);
-      setToast(t("settings.privacy.recoveryKeyCopied"));
+      setToast(t("settings.lock.recoveryCopied"));
     } catch (err) {
-      setToast(translateBackendError(err, t));
+      setToast(String(err));
     }
   };
 
@@ -281,17 +368,17 @@ function PrivacySection({
   return (
     <>
       <div className="space-y-4">
-        {/* Note Locking (macOS only — hidden until password unlock lands) */}
+        {/* Note Locking */}
         {capabilities.note_lock && (
         <div className="space-y-3">
           <p className="text-[11px] font-semibold text-stone uppercase tracking-wider">
-            {t("settings.privacy.noteLocking")}
+            {t("settings.lock.title")}
           </p>
 
           {!authAvailable && (
             <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
               <p className="text-[12px] text-stone leading-relaxed">
-                {t("settings.privacy.authUnavailable")}
+                {t("settings.lock.needPassword")}
               </p>
             </div>
           )}
@@ -299,10 +386,10 @@ function PrivacySection({
           <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
             <div>
               <p className="text-[13px] text-ink font-medium">
-                {t("settings.privacy.enableNoteLocking")}
+                {t("settings.lock.enable")}
               </p>
               <p className="mt-1 text-[12px] text-stone leading-relaxed">
-                {t("settings.privacy.enableNoteLockingDescription")}
+                {t("settings.lock.describe")}
               </p>
             </div>
             <button
@@ -332,30 +419,21 @@ function PrivacySection({
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-[13px] text-ink font-medium">
-                      {t("settings.privacy.autoLockTimeout")}
+                      {t("settings.lock.timeout")}
                     </p>
                     <p className="text-[12px] text-stone">
-                      {t("settings.privacy.autoLockTimeoutDescription")}
+                      {t("settings.lock.timeoutDescribe")}
                     </p>
                   </div>
                   <div className="w-[140px]">
                     <Dropdown
                       value={String(noteLock.timeout_minutes)}
                       options={[
-                        { value: "1", label: t("settings.privacy.oneMinute") },
-                        {
-                          value: "5",
-                          label: t("settings.privacy.minutes", { count: 5 }),
-                        },
-                        {
-                          value: "15",
-                          label: t("settings.privacy.minutes", { count: 15 }),
-                        },
-                        {
-                          value: "30",
-                          label: t("settings.privacy.minutes", { count: 30 }),
-                        },
-                        { value: "60", label: t("settings.privacy.oneHour") },
+                        { value: "1", label: t("duration.1minute") },
+                        { value: "5", label: t("duration.5minutes") },
+                        { value: "15", label: t("duration.15minutes") },
+                        { value: "30", label: t("duration.30minutes") },
+                        { value: "60", label: t("duration.1hour") },
                       ]}
                       onChange={(v) =>
                         onSettingsChange({
@@ -373,10 +451,10 @@ function PrivacySection({
                 <label className="flex items-center justify-between">
                   <div>
                     <p className="text-[13px] text-ink font-medium">
-                      {t("settings.privacy.lockOnSleep")}
+                      {t("settings.lock.onSleep")}
                     </p>
                     <p className="text-[12px] text-stone">
-                      {t("settings.privacy.lockOnSleepDescription")}
+                      {t("settings.lock.onSleepDescribe")}
                     </p>
                   </div>
                   <button
@@ -412,16 +490,14 @@ function PrivacySection({
                   disabled={isLockingAll}
                   className="flex-1 px-3 py-2.5 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors disabled:opacity-50"
                 >
-                  {isLockingAll
-                    ? t("settings.privacy.locking")
-                    : t("settings.privacy.lockSessionNow")}
+                  {isLockingAll ? t("settings.lock.locking") : t("settings.lock.lockNow")}
                 </button>
                 <button
                   type="button"
                   onClick={handleExportRecoveryKey}
                   className="flex-1 px-3 py-2.5 text-[12px] text-stone border border-line rounded-lg hover:bg-line/50 transition-colors"
                 >
-                  {t("settings.privacy.exportRecoveryKey")}
+                  {t("settings.lock.exportKey")}
                 </button>
               </div>
             </>
@@ -432,31 +508,62 @@ function PrivacySection({
         {/* Analytics */}
         <div className="mt-2">
           <p className="text-[11px] font-semibold text-stone uppercase tracking-wider mb-3">
-            {t("settings.privacy.analytics")}
+            {t("settings.analytics.title")}
           </p>
         </div>
 
         <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
           <div>
             <p className="text-[13px] text-ink font-medium">
-              {t("settings.privacy.shareAnonymousData")}
+              {t("settings.remoteImages.title")}
             </p>
             <p className="mt-1 text-[12px] text-stone leading-relaxed">
-              {t("settings.privacy.shareAnonymousDataDescription")}
+              {t("settings.remoteImages.describe")}
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={settings.load_remote_images ?? false}
+            aria-label={t("settings.remoteImages.toggle")}
+            onClick={() =>
+              onSettingsChange({
+                ...settings,
+                load_remote_images: !(settings.load_remote_images ?? false),
+              })
+            }
+            className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
+              settings.load_remote_images ? "bg-coral" : "bg-line"
+            }`}
+          >
+            <span
+              className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
+                settings.load_remote_images
+                  ? "translate-x-5"
+                  : "translate-x-0"
+              }`}
+            />
+          </button>
+        </label>
+
+        <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
+          <div>
+            <p className="text-[13px] text-ink font-medium">
+              {t("settings.analytics.share")}
+            </p>
+            <p className="mt-1 text-[12px] text-stone leading-relaxed">
+              {t("settings.analytics.shareDescribe")}
             </p>
           </div>
           <button
             type="button"
             onClick={() =>
-              onSettingsChange({
-                ...settings,
-                analytics_enabled: !settings.analytics_enabled,
-              })
+              void setAnalyticsEnabled(!settings.analytics_enabled)
             }
             className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
               settings.analytics_enabled ? "bg-coral" : "bg-line"
             }`}
-            title={t("settings.privacy.toggleAnalytics")}
+            title={t("settings.analytics.toggle")}
           >
             <span
               className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
@@ -469,10 +576,10 @@ function PrivacySection({
         <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
           <div>
             <p className="text-[13px] text-ink font-medium">
-              {t("settings.privacy.automaticUpdates")}
+              {t("settings.autoUpdate.title")}
             </p>
             <p className="mt-1 text-[12px] text-stone leading-relaxed">
-              {t("settings.privacy.automaticUpdatesDescription")}
+              {t("settings.autoUpdate.describe")}
             </p>
           </div>
           <button
@@ -486,7 +593,7 @@ function PrivacySection({
             className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
               settings.auto_update_enabled ? "bg-coral" : "bg-line"
             }`}
-            title={t("settings.privacy.toggleAutomaticUpdates")}
+            title={t("settings.autoUpdate.toggle")}
           >
             <span
               className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
@@ -499,32 +606,30 @@ function PrivacySection({
         <div className="p-4 bg-line/30 rounded-xl border border-line/50 space-y-3">
           <div>
             <p className="text-[13px] text-ink font-medium mb-2">
-              {t("settings.privacy.whatWeCollect")}
+              {t("settings.analytics.weCollect")}
             </p>
             <ul className="text-[12px] text-stone leading-relaxed space-y-1">
-              <li>{t("settings.privacy.collectAppOpens")}</li>
-              <li>{t("settings.privacy.collectDeviceType")}</li>
-              <li>{t("settings.privacy.collectScreen")}</li>
-              <li>{t("settings.privacy.collectAnonymousId")}</li>
+              <li>{t("settings.analytics.collectAppOpens")}</li>
+              <li>{t("settings.analytics.collectDevice")}</li>
+              <li>{t("settings.analytics.collectScreen")}</li>
+              <li>{t("settings.analytics.collectId")}</li>
             </ul>
           </div>
           <div>
             <p className="text-[13px] text-ink font-medium mb-2">
-              {t("settings.privacy.whatWeNeverCollect")}
+              {t("settings.analytics.neverCollect")}
             </p>
             <ul className="text-[12px] text-stone leading-relaxed space-y-1">
-              <li>{t("settings.privacy.neverNotes")}</li>
-              <li>{t("settings.privacy.neverPaths")}</li>
-              <li>{t("settings.privacy.neverIdentify")}</li>
+              <li>{t("settings.analytics.neverNotes")}</li>
+              <li>{t("settings.analytics.neverPaths")}</li>
+              <li>{t("settings.analytics.neverIdentify")}</li>
             </ul>
           </div>
         </div>
 
         {deviceId && (
           <div className="p-4 bg-line/30 rounded-xl border border-line/50">
-            <p className="text-[12px] text-stone mb-2">
-              {t("settings.privacy.deviceId")}
-            </p>
+            <p className="text-[12px] text-stone mb-2">{t("settings.analytics.yourDeviceId")}</p>
             <div className="flex items-center gap-2">
               <code className="flex-1 px-2.5 py-2 text-[11px] rounded-lg bg-bg border border-line text-ink font-mono truncate">
                 {deviceId}
@@ -534,18 +639,25 @@ function PrivacySection({
                 onClick={copyDeviceId}
                 className="px-3 py-2 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors whitespace-nowrap"
               >
-                {t("settings.privacy.copy")}
+                {t("common.copy")}
+              </button>
+              <button
+                type="button"
+                onClick={() => void resetDeviceId()}
+                className="px-3 py-2 text-[12px] text-stone border border-line rounded-lg hover:bg-line/50 transition-colors whitespace-nowrap"
+              >
+                {t("settings.analytics.resetId")}
               </button>
             </div>
             <p className="mt-2 text-[11px] text-stone">
-              {t("settings.privacy.deviceIdDescription")}
+              {t("settings.analytics.idNotLinked")}
             </p>
           </div>
         )}
 
         <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
           <p className="text-[12px] text-stone leading-relaxed">
-            {t("settings.privacy.posthogNotice")}
+            {t("settings.analytics.posthog")}
           </p>
         </div>
       </div>
@@ -556,21 +668,21 @@ function PrivacySection({
 
 const COLOR_TOKEN_LABELS: {
   key: keyof ThemeColors;
-  labelKey: MessageKey;
+  labelKey: TranslationKey;
   optional?: boolean;
   default?: string;
 }[] = [
-  { key: "bg", labelKey: "settings.appearance.color.bg" },
-  { key: "surface", labelKey: "settings.appearance.color.surface" },
-  { key: "ink", labelKey: "settings.appearance.color.ink" },
-  { key: "stone", labelKey: "settings.appearance.color.stone" },
-  { key: "line", labelKey: "settings.appearance.color.line" },
-  { key: "accent", labelKey: "settings.appearance.color.accent" },
-  { key: "accent_light", labelKey: "settings.appearance.color.accentLight" },
-  { key: "accent_dark", labelKey: "settings.appearance.color.accentDark" },
+  { key: "bg", labelKey: "settings.color.background" },
+  { key: "surface", labelKey: "settings.color.surface" },
+  { key: "ink", labelKey: "settings.color.text" },
+  { key: "stone", labelKey: "settings.color.mutedText" },
+  { key: "line", labelKey: "settings.color.borders" },
+  { key: "accent", labelKey: "settings.color.accent" },
+  { key: "accent_light", labelKey: "settings.color.accentLight" },
+  { key: "accent_dark", labelKey: "settings.color.accentDark" },
   {
     key: "highlight",
-    labelKey: "settings.appearance.color.highlight",
+    labelKey: "settings.color.highlight",
     optional: true,
     default: "253 224 71",
   },
@@ -591,8 +703,7 @@ function ThemePreviewCard({
   isSystem?: boolean;
   onClick: () => void;
 }) {
-  const { t } = useI18n();
-
+  const { t } = useTranslation();
   return (
     <button
       type="button"
@@ -638,12 +749,12 @@ function ThemePreviewCard({
         </span>
         {isSystem && (
           <span className="text-[9px] text-stone uppercase tracking-wider">
-            {t("settings.appearance.auto")}
+            {t("common.auto")}
           </span>
         )}
         {isDark && !isSystem && (
           <span className="text-[9px] text-stone uppercase tracking-wider">
-            {t("settings.appearance.dark")}
+            {t("theme.dark")}
           </span>
         )}
       </div>
@@ -666,7 +777,7 @@ function CustomThemeEditor({
   onDelete?: () => void;
   isNew: boolean;
 }) {
-  const { t } = useI18n();
+  const { t } = useTranslation();
   const nameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -683,24 +794,26 @@ function CustomThemeEditor({
   return (
     <div className="space-y-4 p-4 bg-line/30 rounded-xl border border-line/50">
       <div>
-        <p className="text-[12px] text-stone mb-1.5">
-          {t("settings.appearance.themeName")}
-        </p>
+        <label
+          className="block text-[12px] text-stone mb-1.5"
+          htmlFor="theme-name-input"
+        >
+          {t("settings.theme.name")}
+        </label>
         <input
           ref={nameInputRef}
+          id="theme-name-input"
           type="text"
           value={theme.name}
           onChange={(e) => onChange({ ...theme, name: e.target.value })}
-          placeholder={t("settings.appearance.themeNamePlaceholder")}
+          placeholder={t("settings.theme.namePlaceholder")}
           maxLength={30}
           className="w-full px-3 py-2 bg-bg border border-line rounded-lg text-[13px] text-ink placeholder:text-stone/70 focus:outline-none focus:border-coral/50"
         />
       </div>
 
       <label className="flex items-center justify-between gap-3">
-        <span className="text-[12px] text-stone">
-          {t("settings.appearance.darkTheme")}
-        </span>
+        <span className="text-[12px] text-stone">{t("settings.theme.dark")}</span>
         <button
           type="button"
           onClick={() => onChange({ ...theme, is_dark: !theme.is_dark })}
@@ -717,9 +830,7 @@ function CustomThemeEditor({
       </label>
 
       <div>
-        <p className="text-[12px] text-stone mb-2">
-          {t("settings.appearance.colors")}
-        </p>
+        <p className="text-[12px] text-stone mb-2">{t("settings.theme.colors")}</p>
         <div className="grid grid-cols-2 gap-2">
           {COLOR_TOKEN_LABELS.map(
             ({ key, labelKey, optional, default: defaultRgb }) => {
@@ -744,9 +855,7 @@ function CustomThemeEditor({
                   <span className="text-[11px] text-ink truncate">
                     {t(labelKey)}
                     {optional && (
-                      <span className="ml-1 text-stone/60">
-                        {t("settings.appearance.optional")}
-                      </span>
+                      <span className="ml-1 text-stone/60">opt</span>
                     )}
                   </span>
                 </div>
@@ -765,17 +874,18 @@ function CustomThemeEditor({
             className="text-[13px] font-medium mb-1"
             style={{ color: `rgb(${theme.colors.ink})` }}
           >
-            {t("settings.appearance.preview")}
+            {t("settings.theme.preview")}
           </p>
           <p
             className="text-[11px] leading-relaxed"
             style={{ color: `rgb(${theme.colors.stone})` }}
           >
-            {t("settings.appearance.previewText")}{" "}
+
+            {t("settings.theme.previewHint")}{" "}
             <span style={{ color: `rgb(${theme.colors.accent})` }}>
-              {t("settings.appearance.accentColor")}
+              {t("settings.theme.accentColor")}
             </span>{" "}
-            {t("settings.appearance.previewSuffix")}
+            {t("settings.theme.accentColorDesc")}
           </p>
         </div>
         <div
@@ -792,7 +902,7 @@ function CustomThemeEditor({
               color: theme.is_dark ? `rgb(${theme.colors.bg})` : "#fff",
             }}
           >
-            {t("settings.appearance.button")}
+            {t("settings.theme.button")}
           </div>
           <div
             className="px-2.5 py-1 rounded-md text-[10px]"
@@ -801,7 +911,7 @@ function CustomThemeEditor({
               color: `rgb(${theme.colors.stone})`,
             }}
           >
-            {t("settings.appearance.secondary")}
+            {t("settings.theme.secondary")}
           </div>
         </div>
       </div>
@@ -813,16 +923,14 @@ function CustomThemeEditor({
           disabled={!theme.name.trim()}
           className="px-3 py-2 text-[12px] font-medium text-white bg-coral rounded-lg hover:bg-coral/90 transition-colors disabled:opacity-50"
         >
-          {isNew
-            ? t("settings.appearance.create")
-            : t("settings.appearance.update")}
+          {isNew ? t("common.create") : t("common.update")}
         </button>
         <button
           type="button"
           onClick={onCancel}
           className="px-3 py-2 text-[12px] text-stone hover:text-ink rounded-lg hover:bg-line transition-colors"
         >
-          {t("common.cancel")}
+          {t("common.cancelAction")}
         </button>
         {onDelete && (
           <button
@@ -845,7 +953,7 @@ function AppearanceSection({
   settings: StikSettings;
   onSettingsChange: (settings: StikSettings) => void;
 }) {
-  const { t } = useI18n();
+  const { t } = useTranslation();
   const [editingTheme, setEditingTheme] =
     useState<CustomThemeDefinition | null>(null);
   const [isNewTheme, setIsNewTheme] = useState(false);
@@ -869,32 +977,38 @@ function AppearanceSection({
   const handleImportFont = async () => {
     const selected = await open({
       multiple: false,
-      title: t("settings.appearance.importFontFile"),
+      title: t("settings.font.importFile"),
       filters: [
-        {
-          name: t("settings.appearance.fontFiles"),
-          extensions: ["ttf", "otf", "woff", "woff2"],
-        },
+        { name: t("settings.font.files"), extensions: ["ttf", "otf", "woff", "woff2"] },
       ],
     });
     if (!selected) return;
 
-    const name = fontNameFromPath(selected);
-    // Avoid duplicates (same path)
-    if (customFonts.some((f) => f.path === selected)) {
-      setToast(t("settings.appearance.fontAlreadyImported", { name }));
+    // Copy into ~/.stik/fonts first: the picked file may sit anywhere, and a
+    // font referenced in place stops working the moment the user moves it.
+    let entry: CustomFontEntry;
+    try {
+      entry = await invoke<CustomFontEntry>("import_font_file", { path: selected });
+    } catch (error) {
+      setToast(typeof error === "string" ? error : t("settings.font.loadFailed"));
       return;
     }
 
-    const ok = await loadCustomFont(name, selected);
+    const { name } = entry;
+    if (customFonts.some((f) => f.path === entry.path)) {
+      setToast(`Font "${name}" is already imported`);
+      return;
+    }
+
+    const ok = await loadCustomFont(name, entry.path);
     if (!ok) {
-      setToast(t("settings.appearance.fontLoadFailed"));
+      setToast(t("settings.font.loadFailed"));
       return;
     }
 
-    const updated = [...customFonts, { name, path: selected }];
+    const updated = [...customFonts, entry];
     onSettingsChange({ ...settings, custom_fonts: updated });
-    setToast(t("settings.appearance.fontImported", { name }));
+    setToast(`Font "${name}" imported`);
   };
 
   const removeCustomFont = (path: string) => {
@@ -906,7 +1020,7 @@ function AppearanceSection({
       patch.font_family = null;
     }
     onSettingsChange({ ...settings, ...patch });
-    if (entry) setToast(t("settings.appearance.fontRemoved", { name: entry.name }));
+    if (entry) setToast(`Font "${entry.name}" removed`);
   };
 
   const activeTheme = settings.active_theme || settings.theme_mode || "system";
@@ -953,8 +1067,8 @@ function AppearanceSection({
     setEditingTheme(null);
     setToast(
       isNewTheme
-        ? t("settings.appearance.themeCreated", { name: editingTheme.name })
-        : t("settings.appearance.themeUpdated", { name: editingTheme.name }),
+        ? `Theme "${editingTheme.name}" created`
+        : `Theme "${editingTheme.name}" updated`,
     );
   };
 
@@ -971,16 +1085,14 @@ function AppearanceSection({
     onSettingsChange({ ...settings, ...newSettings });
     if (editingTheme?.id === id) setEditingTheme(null);
     setConfirmingDelete(null);
-    if (theme) setToast(t("settings.appearance.themeDeleted", { name: theme.name }));
+    if (theme) setToast(`Theme "${theme.name}" deleted`);
   };
 
   const handleImport = async () => {
     const selected = await open({
       multiple: false,
-      title: t("settings.appearance.importThemeFile"),
-      filters: [
-        { name: t("settings.appearance.themeFiles"), extensions: ["json", "toml"] },
-      ],
+      title: t("settings.theme.importFile"),
+      filters: [{ name: t("settings.theme.files"), extensions: ["json", "toml"] }],
     });
     if (!selected) return;
 
@@ -998,9 +1110,9 @@ function AppearanceSection({
         active_theme: imported.id,
         theme_mode: imported.id,
       });
-      setToast(t("settings.appearance.themeImported", { name: imported.name }));
+      setToast(`Theme "${imported.name}" imported`);
     } catch (error) {
-      setToast(t("settings.appearance.importFailed", { error: String(error) }));
+      setToast(`Import failed: ${error}`);
     }
   };
 
@@ -1010,7 +1122,7 @@ function AppearanceSection({
     colors: ThemeColors;
   }) => {
     const selected = await save({
-      title: t("settings.appearance.exportTheme"),
+      title: t("settings.theme.export"),
       defaultPath: `${theme.name.toLowerCase().replace(/\s+/g, "-")}.json`,
       filters: [
         { name: "JSON", extensions: ["json"] },
@@ -1026,9 +1138,9 @@ function AppearanceSection({
         is_dark: theme.is_dark,
         colors: theme.colors,
       });
-      setToast(t("settings.appearance.themeExported", { name: theme.name }));
+      setToast(`Theme "${theme.name}" exported`);
     } catch (error) {
-      setToast(t("settings.appearance.exportFailed", { error: String(error) }));
+      setToast(`Export failed: ${error}`);
     }
   };
 
@@ -1041,13 +1153,40 @@ function AppearanceSection({
   return (
     <>
       <div className="space-y-4">
+        <div className="p-4 bg-line/30 rounded-xl border border-line/50">
+          <p className="text-[13px] text-ink font-medium mb-1">
+            {t("settings.language.title")}
+          </p>
+          <p className="text-[12px] text-stone leading-relaxed mb-3">
+            {t("settings.language.description")}
+          </p>
+          <div className="max-w-[240px]">
+            <Dropdown
+              value={settings.language ?? ""}
+              options={[
+                { value: "", label: t("settings.language.system") },
+                ...LOCALES.map((l) => ({
+                  value: l.id,
+                  label:
+                    l.nativeLabel === l.englishLabel
+                      ? l.nativeLabel
+                      : `${l.nativeLabel} (${l.englishLabel})`,
+                })),
+              ]}
+              onChange={(value) =>
+                onSettingsChange({ ...settings, language: value })
+              }
+            />
+          </div>
+        </div>
+
         <p className="text-[12px] text-stone">
-          {t("settings.appearance.description")}
+          {t("settings.theme.chooseIntro")}
         </p>
 
         <div className="grid grid-cols-3 gap-2">
           <ThemePreviewCard
-            name={t("settings.appearance.system")}
+            name={t("common.system")}
             colors={systemColors.colors}
             isDark={systemColors.isDark}
             isActive={activeTheme === "system" || activeTheme === ""}
@@ -1057,7 +1196,7 @@ function AppearanceSection({
           {BUILTIN_THEMES.map((theme) => (
             <ThemePreviewCard
               key={theme.id}
-              name={theme.name}
+              name={t(theme.nameKey)}
               colors={theme.colors}
               isDark={theme.isDark}
               isActive={activeTheme === theme.id}
@@ -1073,15 +1212,16 @@ function AppearanceSection({
                 isActive={activeTheme === theme.id}
                 onClick={() => selectTheme(theme.id)}
               />
-              <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     startEditTheme(theme);
                   }}
-                  className="w-5 h-5 flex items-center justify-center rounded bg-bg/80 backdrop-blur-sm text-stone hover:text-ink text-[10px]"
-                  title={t("settings.appearance.editTheme")}
+                  className="w-6 h-6 flex items-center justify-center rounded bg-bg/80 backdrop-blur-sm text-stone hover:text-ink text-[10px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral"
+                  title={t("settings.theme.edit")}
+                  aria-label={t("settings.theme.edit")}
                 >
                   <svg
                     width="10"
@@ -1102,8 +1242,9 @@ function AppearanceSection({
                     e.stopPropagation();
                     handleExport(theme);
                   }}
-                  className="w-5 h-5 flex items-center justify-center rounded bg-bg/80 backdrop-blur-sm text-stone hover:text-ink text-[10px]"
-                  title={t("settings.appearance.exportTheme")}
+                  className="w-6 h-6 flex items-center justify-center rounded bg-bg/80 backdrop-blur-sm text-stone hover:text-ink text-[10px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral"
+                  title={t("settings.theme.export")}
+                  aria-label={t("settings.theme.export")}
                 >
                   <svg
                     width="10"
@@ -1126,8 +1267,9 @@ function AppearanceSection({
                     e.stopPropagation();
                     setConfirmingDelete(theme.id);
                   }}
-                  className="w-5 h-5 flex items-center justify-center rounded bg-bg/80 backdrop-blur-sm text-stone hover:text-coral text-[10px]"
-                  title={t("settings.appearance.deleteTheme")}
+                  className="w-6 h-6 flex items-center justify-center rounded bg-bg/80 backdrop-blur-sm text-stone hover:text-coral text-[10px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral"
+                  title={t("settings.theme.delete")}
+                  aria-label={t("settings.theme.delete")}
                 >
                   <svg
                     width="10"
@@ -1170,7 +1312,7 @@ function AppearanceSection({
               className="flex-1 px-4 py-3 text-[13px] text-coral hover:bg-coral-light rounded-xl transition-colors flex items-center justify-center gap-2 border border-dashed border-coral/30 hover:border-coral/50"
             >
               <span className="text-lg">+</span>
-              <span>{t("settings.appearance.createCustomTheme")}</span>
+              <span>{t("settings.theme.create")}</span>
             </button>
             <button
               type="button"
@@ -1191,7 +1333,7 @@ function AppearanceSection({
                 <polyline points="7 10 12 15 17 10" />
                 <line x1="12" y1="15" x2="12" y2="3" />
               </svg>
-              <span>{t("settings.appearance.import")}</span>
+              <span>{t("common.import")}</span>
             </button>
           </div>
         )}
@@ -1199,9 +1341,7 @@ function AppearanceSection({
         {/* ── Font Picker ── */}
         <div>
           <div className="flex items-center justify-between mb-2">
-            <p className="text-[12px] text-stone font-medium">
-              {t("settings.appearance.editorFont")}
-            </p>
+            <p className="text-[12px] text-stone font-medium">{t("settings.font.editorFont")}</p>
             <button
               type="button"
               onClick={handleImportFont}
@@ -1221,7 +1361,8 @@ function AppearanceSection({
                 <polyline points="7 10 12 15 17 10" />
                 <line x1="12" y1="15" x2="12" y2="3" />
               </svg>
-              {t("settings.appearance.importFont")}
+
+              {t("settings.font.importEllipsis")}
             </button>
           </div>
 
@@ -1237,7 +1378,7 @@ function AppearanceSection({
                   : "border-line text-stone hover:border-coral/40 hover:text-ink"
               }`}
             >
-              {t("settings.appearance.systemDefault")}
+              {t("settings.font.systemDefault")}
             </button>
           </div>
 
@@ -1245,10 +1386,10 @@ function AppearanceSection({
             <div key={cat} className="mb-2">
               <p className="text-[10px] text-stone uppercase tracking-wider mb-1.5">
                 {cat === "sans"
-                  ? t("settings.appearance.sansSerif")
+                  ? t("settings.font.sansSerif")
                   : cat === "serif"
-                    ? t("settings.appearance.serif")
-                    : t("settings.appearance.monospace")}
+                    ? t("settings.font.serif")
+                    : t("settings.font.monospace")}
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {FONTS.filter((f) => f.category === cat).map((font) => (
@@ -1276,7 +1417,7 @@ function AppearanceSection({
           {customFonts.length > 0 && (
             <div className="mb-1">
               <p className="text-[10px] text-stone uppercase tracking-wider mb-1.5">
-                {t("settings.appearance.custom")}
+                {t("settings.template.custom")}
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {customFonts.map((cf) => (
@@ -1292,9 +1433,7 @@ function AppearanceSection({
                             });
                           else
                             setToast(
-                              t("settings.appearance.fontMoved", {
-                                name: cf.name,
-                              }),
+                              `Could not load "${cf.name}" — file may have moved`,
                             );
                         });
                       }}
@@ -1315,7 +1454,8 @@ function AppearanceSection({
                           ? "bg-coral text-white border-coral hover:bg-coral/90"
                           : "border-line text-stone hover:text-coral hover:border-coral/40"
                       }`}
-                      title={t("settings.appearance.removeFont")}
+                      title={t("settings.font.remove")}
+                      aria-label={`${t("settings.font.remove")} ${cf.name}`}
                     >
                       ×
                     </button>
@@ -1330,7 +1470,7 @@ function AppearanceSection({
         <div className="p-4 bg-line/30 rounded-xl border border-line/50">
           <div className="flex items-center justify-between mb-2">
             <p className="text-[13px] text-ink font-medium">
-              {t("settings.appearance.backgroundOpacity")}
+              {t("settings.opacity.title")}
             </p>
             <span className="text-[12px] font-mono text-stone tabular-nums">
               {Math.round(windowOpacity * 100)}%
@@ -1338,6 +1478,7 @@ function AppearanceSection({
           </div>
           <input
             type="range"
+            aria-label={t("settings.opacity.title")}
             min={20}
             max={100}
             step={5}
@@ -1351,22 +1492,22 @@ function AppearanceSection({
             className="w-full accent-coral"
           />
           <p className="mt-2 text-[11px] text-stone leading-relaxed">
-            {t("settings.appearance.backgroundOpacityDescription")}
+            {t("settings.opacity.describe")}
           </p>
         </div>
 
         <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
           <p className="text-[12px] text-stone leading-relaxed">
-            {t("settings.appearance.themeNotice")}
+            {t("settings.theme.scopeNote")}
           </p>
         </div>
       </div>
 
       {confirmingDelete && (
         <ConfirmDialog
-          title={t("settings.appearance.deleteThemeTitle")}
-          description={t("settings.appearance.deleteThemeDescription", {
-            name: customThemes.find((t) => t.id === confirmingDelete)?.name ?? "",
+          title={t("settings.theme.deleteConfirm")}
+          description={t("settings.theme.deleteDescribe", {
+            name: customThemes.find((c) => c.id === confirmingDelete)?.name ?? "",
           })}
           onConfirm={() => deleteTheme(confirmingDelete)}
           onCancel={() => setConfirmingDelete(null)}
@@ -1386,19 +1527,18 @@ function validateTemplateName(
   name: string,
   existingNames: string[],
   editingIndex: number | null,
-  t: Translator,
 ): string | null {
   if (name.length < TEMPLATE_NAME_MIN)
-    return t("settings.templates.nameTooShort", { count: TEMPLATE_NAME_MIN });
+    return tGlobal("settings.template.nameTooShort", { min: TEMPLATE_NAME_MIN });
   if (name.length > TEMPLATE_NAME_MAX)
-    return t("settings.templates.nameTooLong", { count: TEMPLATE_NAME_MAX });
+    return tGlobal("settings.template.nameTooLong", { max: TEMPLATE_NAME_MAX });
   if (!TEMPLATE_NAME_RE.test(name))
-    return t("settings.templates.nameInvalid");
+    return tGlobal("settings.template.nameRule");
   if (BUILTIN_COMMAND_NAMES.includes(name))
-    return t("settings.templates.builtinCommand", { name });
+    return tGlobal("settings.template.nameBuiltin", { name });
   const dupeIdx = existingNames.findIndex((n) => n === name);
   if (dupeIdx >= 0 && dupeIdx !== editingIndex)
-    return t("settings.templates.duplicateName");
+    return tGlobal("settings.template.nameTaken");
   return null;
 }
 
@@ -1409,7 +1549,7 @@ function TemplatesSection({
   templates: CustomTemplate[];
   onChange: (templates: CustomTemplate[]) => void;
 }) {
-  const { t } = useI18n();
+  const { t } = useTranslation();
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
   const [editBody, setEditBody] = useState("");
@@ -1454,12 +1594,11 @@ function TemplatesSection({
       trimmedName,
       existingNames,
       editingIndex === -1 ? null : editingIndex,
-      t,
     );
     const bErr = !trimmedBody
-      ? t("settings.templates.bodyEmpty")
+      ? t("settings.template.bodyEmpty")
       : trimmedBody.length > TEMPLATE_BODY_MAX
-        ? t("settings.templates.bodyTooLong", { count: TEMPLATE_BODY_MAX })
+        ? `Body must be at most ${TEMPLATE_BODY_MAX} characters`
         : null;
 
     setNameError(nErr);
@@ -1478,8 +1617,8 @@ function TemplatesSection({
     cancelEdit();
     setToast(
       isNew
-        ? t("settings.templates.added", { name: trimmedName })
-        : t("settings.templates.updated", { name: trimmedName }),
+        ? `Template /${trimmedName} added`
+        : `Template /${trimmedName} updated`,
     );
   };
 
@@ -1488,37 +1627,36 @@ function TemplatesSection({
     onChange(templates.filter((_, i) => i !== index));
     if (editingIndex === index) cancelEdit();
     setConfirmingDelete(null);
-    setToast(t("settings.templates.deleted", { name }));
+    setToast(`Template /${name} deleted`);
   };
 
   return (
     <>
       <div className="space-y-4">
         <p className="text-[12px] text-stone">
-          {t("settings.templates.description")}
+          {t("settings.template.intro")}
         </p>
 
         {/* Existing templates */}
         {templates.length > 0 && (
           <div className="space-y-2">
-            {templates.map((template, i) => (
+            {templates.map((tpl, i) => (
               <div
                 key={i}
                 className="flex items-center gap-2 px-3 py-2.5 bg-line/30 rounded-xl border border-line/50"
               >
                 <div className="flex-1 min-w-0">
-                  <p className="text-[13px] text-ink font-medium">
-                    /{template.name}
-                  </p>
+                  <p className="text-[13px] text-ink font-medium">/{tpl.name}</p>
                   <p className="text-[11px] text-stone truncate">
-                    {template.body.split("\n")[0].slice(0, 60)}
+                    {tpl.body.split("\n")[0].slice(0, 60)}
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => startEdit(i)}
                   className="w-6 h-6 shrink-0 flex items-center justify-center rounded-md hover:bg-line text-stone hover:text-ink transition-colors"
-                  title={t("settings.templates.editTemplate")}
+                  title={t("settings.template.edit")}
+                  aria-label={`${t("settings.template.edit")} /${tpl.name}`}
                 >
                   <svg
                     width="12"
@@ -1537,7 +1675,8 @@ function TemplatesSection({
                   type="button"
                   onClick={() => setConfirmingDelete(i)}
                   className="w-6 h-6 shrink-0 flex items-center justify-center rounded-md hover:bg-coral-light text-stone hover:text-coral transition-colors"
-                  title={t("settings.templates.deleteTemplate")}
+                  title={t("settings.template.delete")}
+                  aria-label={`${t("settings.template.delete")} /${tpl.name}`}
                 >
                   <svg
                     width="14"
@@ -1563,13 +1702,17 @@ function TemplatesSection({
         {editingIndex !== null ? (
           <div className="p-4 bg-line/30 rounded-xl border border-line/50 space-y-3">
             <div>
-              <p className="text-[12px] text-stone mb-1.5">
-                {t("settings.templates.commandName")}
-              </p>
+              <label
+                className="block text-[12px] text-stone mb-1.5"
+                htmlFor="template-name-input"
+              >
+                {t("settings.template.commandName")}
+              </label>
               <div className="flex items-center gap-2">
                 <span className="text-[13px] text-stone">/</span>
                 <input
                   ref={nameInputRef}
+                  id="template-name-input"
                   type="text"
                   value={editName}
                   onChange={(e) => {
@@ -1587,16 +1730,20 @@ function TemplatesSection({
             </div>
 
             <div>
-              <p className="text-[12px] text-stone mb-1.5">
-                {t("settings.templates.templateBody")}
-              </p>
+              <label
+                className="block text-[12px] text-stone mb-1.5"
+                htmlFor="template-body-input"
+              >
+                {t("settings.template.body")}
+              </label>
               <textarea
+                id="template-body-input"
                 value={editBody}
                 onChange={(e) => {
                   setEditBody(e.target.value);
                   setBodyError(null);
                 }}
-                placeholder={t("settings.templates.bodyPlaceholder")}
+                placeholder={"# My Template\n\nContent here...\n\n{{cursor}}"}
                 rows={6}
                 maxLength={TEMPLATE_BODY_MAX}
                 className="w-full px-3 py-2 bg-bg border border-line rounded-lg text-[13px] text-ink font-mono placeholder:text-stone/70 focus:outline-none focus:border-coral/50 resize-y"
@@ -1608,7 +1755,7 @@ function TemplatesSection({
 
             <div className="p-2.5 bg-bg/50 rounded-lg border border-line/50">
               <p className="text-[11px] text-stone mb-1 font-medium">
-                {t("settings.templates.placeholders")}
+                {t("settings.template.placeholders")}
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {[
@@ -1628,7 +1775,8 @@ function TemplatesSection({
                 ))}
               </div>
               <p className="mt-1.5 text-[10px] text-stone">
-                {t("settings.templates.cursorHint")}
+                <span className="text-ink">{"{{cursor}}"}</span>{" "}
+                {t("settings.template.cursorHint")}
               </p>
             </div>
 
@@ -1638,16 +1786,14 @@ function TemplatesSection({
                 onClick={saveEdit}
                 className="px-3 py-2 text-[12px] font-medium text-white bg-coral rounded-lg hover:bg-coral/90 transition-colors"
               >
-                {editingIndex === -1
-                  ? t("settings.templates.add")
-                  : t("common.save")}
+                {editingIndex === -1 ? "Add" : t("common.save")}
               </button>
               <button
                 type="button"
                 onClick={cancelEdit}
                 className="px-3 py-2 text-[12px] text-stone hover:text-ink rounded-lg hover:bg-line transition-colors"
               >
-                {t("common.cancel")}
+                {t("common.cancelAction")}
               </button>
             </div>
           </div>
@@ -1658,22 +1804,20 @@ function TemplatesSection({
             className="w-full px-4 py-3 text-[13px] text-coral hover:bg-coral-light rounded-xl transition-colors flex items-center justify-center gap-2 border border-dashed border-coral/30 hover:border-coral/50"
           >
             <span className="text-lg">+</span>
-            <span>{t("settings.templates.addTemplate")}</span>
+            <span>{t("settings.template.add")}</span>
           </button>
         )}
 
         <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
           <p className="text-[12px] text-stone leading-relaxed">
-            {t("settings.templates.notice")}
+            {t("settings.template.badgeHint")}
           </p>
         </div>
       </div>
       {confirmingDelete !== null && (
         <ConfirmDialog
-          title={t("settings.templates.deleteTitle")}
-          description={t("settings.templates.deleteDescription", {
-            name: templates[confirmingDelete]?.name ?? "",
-          })}
+          title={t("settings.template.deleteConfirm")}
+          description={`This will remove /${templates[confirmingDelete]?.name} from your slash commands.`}
           onConfirm={() => confirmDelete(confirmingDelete)}
           onCancel={() => setConfirmingDelete(null)}
         />
@@ -1708,31 +1852,15 @@ export default function SettingsContent({
   onOpenGitRemote,
   onTabChange,
 }: SettingsContentProps) {
-  const [showGitAdvanced, setShowGitAdvanced] = useState(false);
-  const { t } = useI18n();
+  const { t } = useTranslation();
   const capabilities = usePlatformCapabilities();
-  // iCloud is macOS-only: on other platforms the toggle and its notices are
-  // hidden, and the notes directory / Git sharing stay usable.
-  const isIcloudEnabled =
-    capabilities.icloud && (settings.icloud?.enabled ?? false);
-  // System shortcuts that this platform actually supports. The values stay in
-  // settings so nothing is lost when a shortcut is only hidden here.
-  const visibleSystemShortcutActions = SYSTEM_SHORTCUT_ACTIONS.filter(
-    (action) => action !== "clip_capture" || capabilities.clip_capture,
-  );
-  const systemShortcutLabel = (action: SystemAction) => {
-    const labels: Record<SystemAction, ReturnType<typeof t>> = {
-      search: t("systemShortcuts.commandPalette"),
-      manager: t("systemShortcuts.commandPaletteAlt"),
-      settings: t("systemShortcuts.settings"),
-      last_note: t("systemShortcuts.lastNote"),
-      zen_mode: t("systemShortcuts.zenMode"),
-      dictation: t("systemShortcuts.dictation"),
-      voice_note: t("systemShortcuts.voiceNote"),
-      clip_capture: t("systemShortcuts.clipCapture"),
-    };
-    return labels[action];
-  };
+  const isIcloudEnabled = capabilities.icloud && (settings.icloud?.enabled ?? false);
+  const visibleSystemShortcutActions = SYSTEM_SHORTCUT_ACTIONS.filter((action) => {
+    if (action === "clip_capture") return capabilities.clip_capture;
+    if (action === "dictation" || action === "voice_note") return capabilities.dictation;
+    return true;
+  });
+  const [showGitAdvanced, setShowGitAdvanced] = useState(false);
   const remoteWebUrl = remoteToWebUrl(settings.git_sharing.remote_url);
   const notesDir = settings.notes_directory
     ? settings.use_directory_as_root
@@ -1743,20 +1871,6 @@ export default function SettingsContent({
     settings.git_sharing.repository_layout === "stik_root"
       ? notesDir
       : `${notesDir}/${settings.git_sharing.shared_folder || "Inbox"}`;
-  const localizedCaptureStreakLabel =
-    captureStreakDays === 1
-      ? t("settings.insights.streakOneDay")
-      : captureStreakDays !== null
-        ? t("settings.insights.streakDays", { count: captureStreakDays })
-        : captureStreakLabel || t("settings.insights.streakUnavailable");
-  const localizedOnThisDayMessage =
-    onThisDayMessage === "On This Day already shown today"
-      ? t("settings.insights.onThisDayAlreadyShown")
-      : onThisDayMessage === "No On This Day note found"
-        ? t("settings.insights.onThisDayNotFound")
-        : onThisDayMessage === "On This Day note found"
-          ? t("settings.insights.onThisDayFound")
-          : onThisDayMessage;
 
   const updateMapping = (index: number, updates: Partial<ShortcutMapping>) => {
     const newMappings = [...settings.shortcut_mappings];
@@ -1821,45 +1935,16 @@ export default function SettingsContent({
   return (
     <div>
       {activeTab === "appearance" && (
-        <div className="space-y-4">
-          <div className="p-4 bg-line/30 rounded-xl border border-line/50">
-            <p className="text-[13px] text-ink font-medium mb-1">
-              {t("settings.language.title")}
-            </p>
-            <p className="text-[12px] text-stone leading-relaxed mb-3">
-              {t("settings.language.description")}
-            </p>
-            <div className="max-w-[280px]">
-              <Dropdown
-                value={settings.locale ?? "en"}
-                options={[
-                  {
-                    value: "zh-CN",
-                    label: t("settings.language.chinese"),
-                  },
-                  { value: "en", label: t("settings.language.english") },
-                ]}
-                onChange={(value) =>
-                  onSettingsChange({
-                    ...settings,
-                    locale: value === "zh-CN" ? "zh-CN" : "en",
-                    has_completed_onboarding: true,
-                  })
-                }
-              />
-            </div>
-          </div>
-          <AppearanceSection
-            settings={settings}
-            onSettingsChange={onSettingsChange}
-          />
-        </div>
+        <AppearanceSection
+          settings={settings}
+          onSettingsChange={onSettingsChange}
+        />
       )}
 
       {activeTab === "shortcuts" && (
         <div>
           <p className="mb-4 text-[12px] text-stone">
-            {t("settings.shortcuts.description")}
+            {t("settings.shortcut.intro")}
           </p>
 
           <div className="space-y-2">
@@ -1892,7 +1977,8 @@ export default function SettingsContent({
                   type="button"
                   onClick={() => removeMapping(index)}
                   className="w-6 h-6 shrink-0 flex items-center justify-center rounded-md hover:bg-coral-light text-stone hover:text-coral transition-colors"
-                  title={t("settings.shortcuts.removeShortcut")}
+                  title={t("settings.shortcut.remove")}
+                  aria-label={t("settings.shortcut.remove")}
                 >
                   <svg
                     width="14"
@@ -1919,13 +2005,11 @@ export default function SettingsContent({
             className="mt-4 w-full px-4 py-3 text-[13px] text-coral hover:bg-coral-light rounded-xl transition-colors flex items-center justify-center gap-2 border border-dashed border-coral/30 hover:border-coral/50"
           >
             <span className="text-lg">+</span>
-            <span>{t("settings.shortcuts.addShortcut")}</span>
+            <span>{t("settings.shortcut.add")}</span>
           </button>
 
           <div className="mt-6">
-            <p className="text-[12px] text-stone mb-3">
-              {t("settings.shortcuts.systemShortcuts")}
-            </p>
+            <p className="text-[12px] text-stone mb-3">{t("settings.shortcut.system")}</p>
             <div className="space-y-2">
               {visibleSystemShortcutActions.map((action) => {
                 const currentShortcut =
@@ -1951,7 +2035,7 @@ export default function SettingsContent({
                     className="flex items-center gap-2 px-3 py-2 bg-line/30 rounded-xl border border-line/50"
                   >
                     <span className="w-[70px] shrink-0 text-[12px] text-ink font-medium">
-                      {systemShortcutLabel(action as SystemAction)}
+                      {t(SYSTEM_SHORTCUT_LABEL_KEYS[action as SystemAction])}
                     </span>
                     <div className="flex-1 min-w-0">
                       <ShortcutRecorder
@@ -1969,6 +2053,38 @@ export default function SettingsContent({
                         existingShortcuts={folderShortcuts}
                       />
                     </div>
+                    {currentShortcut !== "" &&
+                      isClearableAction(action as SystemAction) && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onSettingsChange({
+                              ...settings,
+                              system_shortcuts: {
+                                ...settings.system_shortcuts,
+                                [action]: "",
+                              },
+                            })
+                          }
+                          className="w-6 h-6 shrink-0 flex items-center justify-center rounded-md hover:bg-coral-light text-stone hover:text-coral transition-colors"
+                          title={t("settings.shortcut.clear")}
+                          aria-label={t("settings.shortcut.clear")}
+                        >
+                          <svg
+                            width="12"
+                            height="12"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M18 6 6 18" />
+                            <path d="m6 6 12 12" />
+                          </svg>
+                        </button>
+                      )}
                     {!isDefault && (
                       <button
                         type="button"
@@ -1985,7 +2101,8 @@ export default function SettingsContent({
                           })
                         }
                         className="w-6 h-6 shrink-0 flex items-center justify-center rounded-md hover:bg-coral-light text-stone hover:text-coral transition-colors"
-                        title={t("settings.shortcuts.resetToDefault")}
+                        title={t("settings.shortcut.resetDefault")}
+                        aria-label={t("settings.shortcut.resetDefault")}
                       >
                         <svg
                           width="12"
@@ -2021,7 +2138,7 @@ export default function SettingsContent({
                 }
                 className="mt-2 text-[11px] text-coral hover:underline"
               >
-                {t("settings.shortcuts.resetAll")}
+                {t("settings.shortcut.resetAll")}
               </button>
             )}
           </div>
@@ -2030,85 +2147,75 @@ export default function SettingsContent({
 
       {activeTab === "folders" && (
         <div className="space-y-4">
-          {/* iCloud Drive sync (macOS only) */}
-          {capabilities.icloud && (
-            <>
-              <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
-                <div>
-                  <p className="text-[13px] text-ink font-medium">
-                    iCloud Drive
-                  </p>
-                  <p className="mt-1 text-[12px] text-stone leading-relaxed">
-                    {t("settings.folders.icloudDescription")}
-                  </p>
-                </div>
+          {capabilities.icloud && (<>
+          {/* iCloud Drive sync */}
+          <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
+            <div>
+              <p className="text-[13px] text-ink font-medium">{t("settings.icloud.title")}</p>
+              <p className="mt-1 text-[12px] text-stone leading-relaxed">
+                {t("settings.icloud.describe")}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const newICloud = {
+                  ...settings.icloud,
+                  enabled: !isIcloudEnabled,
+                };
+                onSettingsChange({ ...settings, icloud: newICloud });
+              }}
+              className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
+                settings.icloud?.enabled ? "bg-coral" : "bg-line"
+              }`}
+              title={t("settings.icloud.toggle")}
+            >
+              <span
+                className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
+                  settings.icloud?.enabled ? "translate-x-5" : "translate-x-0"
+                }`}
+              />
+            </button>
+          </label>
+
+          {isIcloudEnabled && (
+            <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
+              <p className="text-[12px] text-stone leading-relaxed">
+                {t("settings.icloud.detail")}
+              </p>
+              {!settings.icloud?.migrated && (
                 <button
                   type="button"
-                  onClick={() => {
-                    const newICloud = {
-                      ...settings.icloud,
-                      enabled: !settings.icloud?.enabled,
-                    };
-                    onSettingsChange({ ...settings, icloud: newICloud });
+                  onClick={async () => {
+                    try {
+                      const result = await invoke<{
+                        files_copied: number;
+                        errors: string[];
+                      }>("icloud_migrate_notes");
+                      if (result.files_copied > 0) {
+                        onSettingsChange({
+                          ...settings,
+                          icloud: { ...settings.icloud, migrated: true },
+                        });
+                      }
+                    } catch (e) {
+                      console.error("Migration failed:", e);
+                    }
                   }}
-                  className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
-                    settings.icloud?.enabled ? "bg-coral" : "bg-line"
-                  }`}
-                  title={t("settings.folders.toggleIcloud")}
+                  className="mt-2 px-3 py-1.5 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors"
                 >
-                  <span
-                    className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
-                      settings.icloud?.enabled
-                        ? "translate-x-5"
-                        : "translate-x-0"
-                    }`}
-                  />
+                  {t("settings.icloud.copyExisting")}
                 </button>
-              </label>
-
-              {settings.icloud?.enabled && (
-                <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
-                  <p className="text-[12px] text-stone leading-relaxed">
-                    {t("settings.folders.icloudEnabledNotice")}
-                  </p>
-                  {!settings.icloud?.migrated && (
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        const { invoke } = await import(
-                          "@tauri-apps/api/core"
-                        );
-                        try {
-                          const result = await invoke<{
-                            files_copied: number;
-                            errors: string[];
-                          }>("icloud_migrate_notes");
-                          if (result.files_copied > 0) {
-                            onSettingsChange({
-                              ...settings,
-                              icloud: { ...settings.icloud, migrated: true },
-                            });
-                          }
-                        } catch (e) {
-                          console.error("Migration failed:", e);
-                        }
-                      }}
-                      className="mt-2 px-3 py-1.5 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors"
-                    >
-                      {t("settings.folders.copyToIcloud")}
-                    </button>
-                  )}
-                </div>
               )}
-            </>
+            </div>
           )}
+
+          </>)}
 
           {/* Notes directory (hidden when iCloud is active) */}
           {!isIcloudEnabled && (
             <div>
-              <p className="text-[12px] text-stone mb-1.5">
-                {t("settings.folders.notesDirectory")}
-              </p>
+              <p className="text-[12px] text-stone mb-1.5">{t("settings.notesDirectory")}</p>
               <div className="flex items-center gap-2">
                 <div className="flex-1 px-3 py-2.5 bg-bg border border-line rounded-lg text-[13px] font-mono truncate text-ink">
                   {notesDir}
@@ -2119,7 +2226,7 @@ export default function SettingsContent({
                     const selected = await open({
                       directory: true,
                       multiple: false,
-                      title: t("settings.folders.chooseNotesDirectory"),
+                      title: t("settings.notesDirectory.choose"),
                       defaultPath:
                         settings.notes_directory ||
                         resolvedNotesDir ||
@@ -2134,7 +2241,7 @@ export default function SettingsContent({
                   }}
                   className="px-3 py-2.5 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors whitespace-nowrap"
                 >
-                  {t("settings.folders.browse")}
+                  {t("common.browse")}
                 </button>
                 {settings.notes_directory && (
                   <button
@@ -2144,13 +2251,13 @@ export default function SettingsContent({
                     }
                     className="px-3 py-2.5 text-[12px] text-stone hover:text-coral border border-line rounded-lg hover:border-coral/30 transition-colors whitespace-nowrap"
                   >
-                    {t("settings.folders.reset")}
+                    {t("common.reset")}
                   </button>
                 )}
               </div>
               {!settings.use_directory_as_root && (
                 <p className="mt-1.5 text-[12px] text-stone leading-relaxed">
-                  {t("settings.folders.stikSubfolderHint")}
+                  {t("settings.notesDirectory.stikFolderNote")}
                 </p>
               )}
               {settings.notes_directory && (
@@ -2167,7 +2274,7 @@ export default function SettingsContent({
                     className="rounded border-line"
                   />
                   <span className="text-[12px] text-ink">
-                    {t("settings.folders.useDirectoryAsRoot")}
+                    {t("settings.notesDirectory.asRoot")}
                   </span>
                 </label>
               )}
@@ -2175,9 +2282,29 @@ export default function SettingsContent({
           )}
 
           <div>
-            <p className="text-[12px] text-stone mb-1.5">
-              {t("settings.folders.defaultFolder")}
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={settings.simple_filenames ?? false}
+                onChange={(e) =>
+                  onSettingsChange({
+                    ...settings,
+                    simple_filenames: e.target.checked,
+                  })
+                }
+                className="rounded border-line"
+              />
+              <span className="text-[12px] text-ink">
+                {t("settings.simpleFilenames")}
+              </span>
+            </label>
+            <p className="mt-1.5 text-[12px] text-stone leading-relaxed">
+              {t("settings.simpleFilenames.note")}
             </p>
+          </div>
+
+          <div>
+            <p className="text-[12px] text-stone mb-1.5">{t("settings.defaultFolder")}</p>
             <div className="max-w-[360px]">
               <Dropdown
                 value={settings.default_folder}
@@ -2188,7 +2315,7 @@ export default function SettingsContent({
               />
             </div>
             <p className="mt-1.5 text-[12px] text-stone leading-relaxed">
-              {t("settings.folders.defaultFolderHint")}
+              {t("settings.defaultFolder.describe")}
             </p>
           </div>
 
@@ -2199,17 +2326,17 @@ export default function SettingsContent({
               <p className="text-[12px] text-stone leading-relaxed">
                 <span className="text-ink font-medium">
                   {settings.git_sharing.repository_layout === "stik_root"
-                    ? t("settings.folders.allFolders")
+                    ? t("settings.notesDirectory.allFolders")
                     : settings.git_sharing.shared_folder || "Inbox"}
                 </span>{" "}
-                {t("settings.folders.syncedViaGit", { folder: "" }).trim()}{" "}
+                {t("settings.git.syncedViaGit")}{" "}
                 {onTabChange && (
                   <button
                     type="button"
                     onClick={() => onTabChange("git")}
                     className="text-coral hover:underline"
                   >
-                    {t("settings.folders.settingsGit")}
+                    {t("settings.git.openGitTab")}
                   </button>
                 )}
               </p>
@@ -2217,7 +2344,7 @@ export default function SettingsContent({
           ) : !isIcloudEnabled ? (
             <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
               <p className="text-[12px] text-stone leading-relaxed">
-                {t("settings.folders.syncTip", { path: notesDir })}
+                {t("settings.syncTip", { dir: notesDir })}
               </p>
             </div>
           ) : null}
@@ -2228,11 +2355,9 @@ export default function SettingsContent({
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
             <div>
-              <p className="text-[13px] text-ink font-medium">
-                {t("settings.editor.fontSize")}
-              </p>
+              <p className="text-[13px] text-ink font-medium">{t("settings.fontSize")}</p>
               <p className="mt-1 text-[12px] text-stone leading-relaxed">
-                {t("settings.editor.fontSizeDescription")}
+                {t("settings.fontSize.describe")}
               </p>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
@@ -2270,11 +2395,9 @@ export default function SettingsContent({
 
           <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
             <div>
-              <p className="text-[13px] text-ink font-medium">
-                {t("settings.editor.vimMode")}
-              </p>
+              <p className="text-[13px] text-ink font-medium">{t("settings.vimMode")}</p>
               <p className="mt-1 text-[12px] text-stone leading-relaxed">
-                {t("settings.editor.vimModeDescription")}
+                {t("settings.vimMode.describe")}
               </p>
             </div>
             <button
@@ -2288,7 +2411,7 @@ export default function SettingsContent({
               className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
                 settings.vim_mode_enabled ? "bg-coral" : "bg-line"
               }`}
-              title={t("settings.editor.toggleVim")}
+              title={t("settings.vimMode.toggle")}
             >
               <span
                 className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
@@ -2300,18 +2423,18 @@ export default function SettingsContent({
 
           <div className="p-4 bg-line/30 rounded-xl border border-line/50">
             <p className="text-[13px] text-ink font-medium mb-1">
-              {t("settings.editor.textDirection")}
+              {t("settings.textDirection.title")}
             </p>
             <p className="text-[12px] text-stone leading-relaxed mb-3">
-              {t("settings.editor.textDirectionDescription")}
+              {t("settings.textDirection.describe")}
             </p>
             <div className="max-w-[240px]">
               <Dropdown
                 value={settings.text_direction || "auto"}
                 options={[
-                  { value: "auto", label: t("settings.editor.directionAuto") },
-                  { value: "ltr", label: t("settings.editor.directionLtr") },
-                  { value: "rtl", label: t("settings.editor.directionRtl") },
+                  { value: "auto", label: t("settings.textDirection.auto") },
+                  { value: "ltr", label: t("settings.textDirection.ltr") },
+                  { value: "rtl", label: t("settings.textDirection.rtl") },
                 ]}
                 onChange={(value) =>
                   onSettingsChange({ ...settings, text_direction: value })
@@ -2323,11 +2446,9 @@ export default function SettingsContent({
           {capabilities.hide_dock_icon && (
           <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
             <div>
-              <p className="text-[13px] text-ink font-medium">
-                {t("settings.editor.hideDock")}
-              </p>
+              <p className="text-[13px] text-ink font-medium">{t("settings.hideDockIcon")}</p>
               <p className="mt-1 text-[12px] text-stone leading-relaxed">
-                {t("settings.editor.hideDockDescription")}
+                {t("settings.hideDockIcon.describe")}
               </p>
             </div>
             <button
@@ -2341,7 +2462,7 @@ export default function SettingsContent({
               className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
                 settings.hide_dock_icon ? "bg-coral" : "bg-line"
               }`}
-              title={t("settings.editor.toggleDock")}
+              title={t("settings.hideDockIcon.toggle")}
             >
               <span
                 className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
@@ -2355,10 +2476,10 @@ export default function SettingsContent({
           <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
             <div>
               <p className="text-[13px] text-ink font-medium">
-                {t("settings.editor.hideTray")}
+                {t("settings.hideTrayIcon.title")}
               </p>
               <p className="mt-1 text-[12px] text-stone leading-relaxed">
-                {t("settings.editor.hideTrayDescription")}
+                {t("settings.hideTrayIcon.describe")}
               </p>
             </div>
             <button
@@ -2372,7 +2493,7 @@ export default function SettingsContent({
               className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
                 settings.hide_tray_icon ? "bg-coral" : "bg-line"
               }`}
-              title={t("settings.editor.toggleTray")}
+              title={t("settings.hideTrayIcon.toggle")}
             >
               <span
                 className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
@@ -2383,55 +2504,39 @@ export default function SettingsContent({
           </label>
 
           <div className="p-4 bg-line/30 rounded-xl border border-line/50 space-y-2">
-            <p className="text-[13px] text-ink font-medium">
-              {t("settings.editor.quickReference")}
-            </p>
+            <p className="text-[13px] text-ink font-medium">{t("settings.vim.quickReference")}</p>
             <div className="text-[12px] text-stone leading-relaxed space-y-1">
               <p>
-                <span className="text-ink font-medium">
-                  {t("settings.editor.movement")}
-                </span>{" "}
-                - {t("settings.editor.movementKeys")}
+                <span className="text-ink font-medium">{t("settings.vim.movement")}</span> — h j k
+                l, w b (word), 0 $ (line), gg G (document)
               </p>
               <p>
-                <span className="text-ink font-medium">
-                  {t("settings.editor.insert")}
-                </span>{" "}
-                - {t("settings.editor.insertKeys")}
+                <span className="text-ink font-medium">{t("settings.vim.insert")}</span> — i
+                (before), a (after), A (end of line), o O (new line)
               </p>
               <p>
-                <span className="text-ink font-medium">
-                  {t("settings.editor.edit")}
-                </span>{" "}
-                - {t("settings.editor.editKeys")}
+                <span className="text-ink font-medium">{t("settings.vim.edit")}</span> — x dd cc cw
+                C, yy p, diw ciw, ci/di + &quot; &apos; ( {"{"}
               </p>
               <p>
-                <span className="text-ink font-medium">
-                  {t("settings.editor.visual")}
-                </span>{" "}
-                - {t("settings.editor.visualKeys")}
+                <span className="text-ink font-medium">{t("settings.vim.visual")}</span> — v
+                (chars), V (lines), d x (delete), y (yank), c (change)
               </p>
               <p>
-                <span className="text-ink font-medium">
-                  {t("settings.editor.undo")}
-                </span>{" "}
-                - {t("settings.editor.undoKeys")}
+                <span className="text-ink font-medium">{t("settings.vim.undo")}</span> — u, Ctrl+r
+                (redo), . (repeat)
               </p>
               <p>
-                <span className="text-ink font-medium">
-                  {t("settings.editor.commands")}
-                </span>{" "}
-                - {t("settings.editor.commandsKeys")}
+                <span className="text-ink font-medium">{t("settings.vim.commands")}</span> — :wq
+                (save &amp; close), :q! (discard &amp; close)
               </p>
             </div>
           </div>
 
           <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl space-y-1">
-            <p className="text-[12px] font-semibold text-ink">
-              {t("settings.editor.howToClose")}
-            </p>
+            <p className="text-[12px] font-semibold text-ink">{t("settings.vim.howToClose")}</p>
             <p className="text-[12px] text-stone leading-relaxed">
-              {t("settings.editor.howToCloseDescription")}
+              {t("settings.vim.commandBar")}
             </p>
           </div>
         </div>
@@ -2451,7 +2556,7 @@ export default function SettingsContent({
           {isIcloudEnabled && (
             <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl mb-2">
               <p className="text-[12px] text-stone leading-relaxed">
-                {t("settings.git.icloudDisabled")}
+                {t("settings.git.disabledByICloud")}
               </p>
             </div>
           )}
@@ -2485,10 +2590,14 @@ export default function SettingsContent({
 
           {/* Remote URL — primary field */}
           <div>
-            <p className="text-[12px] text-stone mb-1.5">
+            <label
+              className="block text-[12px] text-stone mb-1.5"
+              htmlFor="git-remote-url-input"
+            >
               {t("settings.git.remoteUrl")}
-            </p>
+            </label>
             <input
+              id="git-remote-url-input"
               type="text"
               value={settings.git_sharing.remote_url}
               onChange={(e) => updateGitSharing({ remote_url: e.target.value })}
@@ -2500,9 +2609,7 @@ export default function SettingsContent({
           {/* Shared folder — only for folder_root layout */}
           {settings.git_sharing.repository_layout === "folder_root" ? (
             <div>
-              <p className="text-[12px] text-stone mb-1.5">
-                {t("settings.git.sharedFolder")}
-              </p>
+              <p className="text-[12px] text-stone mb-1.5">{t("settings.git.sharedFolder")}</p>
               <Dropdown
                 value={settings.git_sharing.shared_folder}
                 options={folders.map((f) => ({ value: f, label: f }))}
@@ -2511,7 +2618,10 @@ export default function SettingsContent({
             </div>
           ) : (
             <p className="text-[12px] text-stone leading-relaxed">
-              {t("settings.git.rootLayoutHint")}
+              {t("settings.git.rootLayoutNote")}
+              <span className="mx-1 text-ink">Inbox/</span>
+              <span className="text-ink">Work/</span>
+              <span className="mx-1 text-ink">Ideas/</span>.
             </p>
           )}
 
@@ -2526,10 +2636,10 @@ export default function SettingsContent({
               {isPreparingGitRepo ? (
                 <span className="inline-flex items-center gap-1.5">
                   <span className="animate-spin">↻</span>
-                  <span>{t("settings.git.linking")}</span>
+                  <span>{t("common.linking")}</span>
                 </span>
               ) : (
-                t("settings.git.linkRepository")
+                t("settings.git.linkRepo")
               )}
             </button>
             <button
@@ -2541,7 +2651,7 @@ export default function SettingsContent({
               {isSyncingGitNow ? (
                 <span className="inline-flex items-center gap-1.5">
                   <span className="animate-spin">↻</span>
-                  <span>{t("settings.git.syncing")}</span>
+                  <span>{t("common.syncing")}</span>
                 </span>
               ) : (
                 t("settings.git.syncNow")
@@ -2554,9 +2664,7 @@ export default function SettingsContent({
                 disabled={isOpeningGitRemote}
                 className="px-3 py-2 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors"
               >
-                {isOpeningGitRemote
-                  ? t("settings.git.opening")
-                  : t("settings.git.openRemote")}
+                {isOpeningGitRemote ? t("common.opening") : t("settings.git.openRemote")}
               </button>
             )}
           </div>
@@ -2564,28 +2672,28 @@ export default function SettingsContent({
           {/* Status */}
           <div className="text-[12px] text-stone leading-relaxed space-y-0.5">
             <p>
+
               {t("settings.git.status")}{" "}
               <span className="text-ink font-medium">
                 {gitSyncStatus?.repo_initialized
-                  ? t("settings.git.repositoryLinked")
+                  ? t("settings.git.linked")
                   : t("settings.git.notLinked")}
               </span>
             </p>
             {gitSyncStatus?.last_sync_at && (
               <p>
+
                 {t("settings.git.lastSync")}{" "}
                 {new Date(gitSyncStatus.last_sync_at).toLocaleString()}
               </p>
             )}
             {gitSyncStatus?.last_error && (
               <p className="text-coral">
-                {t("settings.git.lastError")}{" "}
-                {translateBackendError(gitSyncStatus.last_error, t)}
+
+                {t("settings.git.lastError")} {gitSyncStatus.last_error}
               </p>
             )}
-            <p>
-              {t("settings.git.autoSyncHint")}
-            </p>
+            <p>{t("settings.git.autoSyncNote")}</p>
           </div>
 
           {/* Advanced toggle */}
@@ -2602,18 +2710,18 @@ export default function SettingsContent({
             <div className="space-y-3 pl-3 border-l-2 border-line">
               <div>
                 <p className="text-[12px] text-stone mb-1.5">
-                  {t("settings.git.repositoryLayout")}
+                  {t("settings.git.layout")}
                 </p>
                 <Dropdown
                   value={settings.git_sharing.repository_layout}
                   options={[
                     {
                       value: "folder_root",
-                      label: t("settings.git.layoutFolderRoot"),
+                      label: t("settings.git.layoutSelected"),
                     },
                     {
                       value: "stik_root",
-                      label: t("settings.git.layoutStikRoot"),
+                      label: t("settings.git.layoutWhole"),
                     },
                   ]}
                   onChange={(value) =>
@@ -2626,10 +2734,14 @@ export default function SettingsContent({
 
               <div className="grid grid-cols-[1fr_130px] gap-3">
                 <div>
-                  <p className="text-[12px] text-stone mb-1.5">
+                  <label
+                    className="block text-[12px] text-stone mb-1.5"
+                    htmlFor="git-branch-input"
+                  >
                     {t("settings.git.branch")}
-                  </p>
+                  </label>
                   <input
+                    id="git-branch-input"
                     type="text"
                     value={settings.git_sharing.branch}
                     onChange={(e) =>
@@ -2640,10 +2752,14 @@ export default function SettingsContent({
                   />
                 </div>
                 <div>
-                  <p className="text-[12px] text-stone mb-1.5">
+                  <label
+                    className="block text-[12px] text-stone mb-1.5"
+                    htmlFor="git-pull-interval-input"
+                  >
                     {t("settings.git.pullInterval")}
-                  </p>
+                  </label>
                   <input
+                    id="git-pull-interval-input"
                     type="number"
                     min={60}
                     step={30}
@@ -2667,12 +2783,12 @@ export default function SettingsContent({
           )}
 
           {/* GitHub credentials tip */}
-          <div className="p-3 bg-coral-light/35 border border-coral/20 rounded-xl space-y-1">
+          <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl space-y-1">
             <p className="text-[12px] font-semibold text-ink">
-              {t("settings.git.githubSetup")}
+              {t("settings.git.accountSetup")}
             </p>
             <p className="text-[12px] text-stone leading-relaxed">
-              {t("settings.git.credentialsDescription")}
+              {t("settings.git.credentials")}
             </p>
             <p className="text-[12px] text-stone leading-relaxed">
               {t("settings.git.authHint")}
@@ -2690,10 +2806,10 @@ export default function SettingsContent({
           <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
             <div>
               <p className="text-[13px] text-ink font-medium">
-                {t("ai.settings.title")}
+                {t("settings.ai.enable")}
               </p>
               <p className="mt-1 text-[12px] text-stone leading-relaxed">
-                {t("ai.settings.description")}
+                {t("settings.ai.describe")}
               </p>
             </div>
             <button
@@ -2707,7 +2823,7 @@ export default function SettingsContent({
               className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
                 settings.ai_features_enabled ? "bg-coral" : "bg-line"
               }`}
-              title={t("ai.settings.toggle")}
+              title={t("settings.ai.toggle")}
             >
               <span
                 className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
@@ -2720,43 +2836,39 @@ export default function SettingsContent({
           </label>
 
           <div className="p-4 bg-line/30 rounded-xl border border-line/50 space-y-2">
-            <p className="text-[13px] text-ink font-medium">
-              {t("ai.settings.howItWorks")}
-            </p>
+            <p className="text-[13px] text-ink font-medium">{t("settings.ai.howItWorks")}</p>
             <ul className="text-[12px] text-stone leading-relaxed space-y-1.5">
               <li>
                 <span className="text-ink font-medium">
-                  {t("ai.settings.semanticSearch")}
+                  {t("settings.ai.semanticSearch")}
                 </span>{" "}
-                - {t("ai.settings.semanticSearchDescription")}
+                {t("settings.ai.semanticSearchDesc")}
               </li>
               <li>
                 <span className="text-ink font-medium">
-                  {t("ai.settings.folderSuggestions")}
+                  {t("settings.ai.folderSuggestions")}
                 </span>{" "}
-                - {t("ai.settings.folderSuggestionsDescription")}
+                {t("settings.ai.folderSuggestionsDesc")}
               </li>
               <li>
                 <span className="text-ink font-medium">
-                  {t("ai.settings.noteEmbeddings")}
+                  {t("settings.ai.noteEmbeddings")}
                 </span>{" "}
-                - {t("ai.settings.noteEmbeddingsDescription")}
+                {t("settings.ai.noteEmbeddingsDesc")}
               </li>
             </ul>
           </div>
 
           <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl space-y-1">
-            <p className="text-[12px] font-semibold text-ink">
-              {t("ai.settings.privacy")}
-            </p>
+            <p className="text-[12px] font-semibold text-ink">{t("settings.ai.privacy")}</p>
             <p className="text-[12px] text-stone leading-relaxed">
-              {t("ai.settings.privacyDescription")}
+              {t("settings.ai.privacyNote")}
             </p>
           </div>
 
           {!settings.ai_features_enabled && (
             <p className="text-[12px] text-stone text-center">
-              {t("ai.settings.restartHint")}
+              {t("settings.ai.restartHint")}
             </p>
           )}
         </div>
@@ -2775,18 +2887,18 @@ export default function SettingsContent({
             <div className="flex items-center gap-2 mb-3">
               <span className="text-coral">↻</span>
               <h3 className="text-[13px] font-semibold text-stone uppercase tracking-wide">
-                {t("settings.insights.captureStreak")}
+                {t("settings.streak.title")}
               </h3>
             </div>
             <div className="p-4 bg-line/30 rounded-xl border border-line/50 flex items-center justify-between gap-3">
               <div>
                 <p className="text-[14px] font-semibold text-ink">
-                  {localizedCaptureStreakLabel}
+                  {captureStreakLabel}
                 </p>
                 <p className="mt-1 text-[12px] text-stone leading-relaxed">
-                  {t("settings.insights.streakDescription")}
+                  {t("settings.streak.describe")}
                   {captureStreakDays === null
-                    ? ` ${t("settings.insights.streakUnavailableHint")}`
+                    ? ` ${t("settings.streak.unavailableHint")}`
                     : ""}
                 </p>
               </div>
@@ -2796,9 +2908,7 @@ export default function SettingsContent({
                 disabled={isRefreshingStreak}
                 className="px-3 py-2 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors disabled:opacity-50"
               >
-                {isRefreshingStreak
-                  ? t("settings.insights.refreshing")
-                  : t("settings.insights.refresh")}
+                {isRefreshingStreak ? t("common.refreshing") : t("common.refresh")}
               </button>
             </div>
           </div>
@@ -2807,17 +2917,17 @@ export default function SettingsContent({
             <div className="flex items-center gap-2 mb-3">
               <span className="text-coral">☼</span>
               <h3 className="text-[13px] font-semibold text-stone uppercase tracking-wide">
-                {t("settings.insights.onThisDay")}
+                {t("settings.onThisDay.title")}
               </h3>
             </div>
             <div className="p-4 bg-line/30 rounded-xl border border-line/50 space-y-2">
               <p className="text-[14px] font-semibold text-ink">
-                {localizedOnThisDayMessage}
+                {onThisDayMessage}
               </p>
               {(onThisDayDate || onThisDayFolder) && (
                 <p className="text-[12px] text-stone">
-                  {onThisDayFolder || t("settings.insights.folderUnknown")} •{" "}
-                  {onThisDayDate || t("settings.insights.dateUnknown")}
+                  {onThisDayFolder || t("settings.onThisDay.folderUnknown")} •{" "}
+                  {onThisDayDate || t("settings.onThisDay.dateUnknown")}
                 </p>
               )}
               {onThisDayPreview && (
@@ -2831,14 +2941,14 @@ export default function SettingsContent({
                 disabled={isCheckingOnThisDay}
                 className="mt-2 px-3 py-2 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors disabled:opacity-50"
               >
-                {isCheckingOnThisDay
-                  ? t("settings.insights.checking")
-                  : t("settings.insights.checkNow")}
+                {isCheckingOnThisDay ? t("common.checking") : t("common.checkNow")}
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {activeTab === "health" && <VaultHealth />}
 
       {activeTab === "privacy" && (
         <PrivacySection
@@ -2852,51 +2962,35 @@ export default function SettingsContent({
 
 // ── Dictation settings panel ───────────────────────────────────────
 
-const DICTATION_LANGUAGES: { code: string | null; label: string }[] = [
-  { code: null, label: "Auto-detect" },
-  { code: "en", label: "English" },
-  { code: "it", label: "Italian" },
-  { code: "es", label: "Spanish" },
-  { code: "fr", label: "French" },
-  { code: "de", label: "German" },
-  { code: "pt", label: "Portuguese" },
-  { code: "nl", label: "Dutch" },
-  { code: "ja", label: "Japanese" },
-  { code: "zh", label: "Chinese" },
-  { code: "ko", label: "Korean" },
-  { code: "ru", label: "Russian" },
-  { code: "ar", label: "Arabic" },
-  { code: "hi", label: "Hindi" },
-  { code: "tr", label: "Turkish" },
-  { code: "pl", label: "Polish" },
-  { code: "el", label: "Greek" },
-  { code: "cs", label: "Czech" },
-  { code: "sv", label: "Swedish" },
-  { code: "ro", label: "Romanian" },
-  { code: "uk", label: "Ukrainian" },
+const DICTATION_LANGUAGES: { code: string | null; labelKey: TranslationKey }[] = [
+  { code: null, labelKey: "language.autoDetect" },
+  { code: "en", labelKey: "language.english" },
+  { code: "it", labelKey: "language.italian" },
+  { code: "es", labelKey: "language.spanish" },
+  { code: "fr", labelKey: "language.french" },
+  { code: "de", labelKey: "language.german" },
+  { code: "pt", labelKey: "language.portuguese" },
+  { code: "nl", labelKey: "language.dutch" },
+  { code: "ja", labelKey: "language.japanese" },
+  { code: "zh", labelKey: "language.chinese" },
+  { code: "ko", labelKey: "language.korean" },
+  { code: "ru", labelKey: "language.russian" },
+  { code: "ar", labelKey: "language.arabic" },
+  { code: "hi", labelKey: "language.hindi" },
+  { code: "tr", labelKey: "language.turkish" },
+  { code: "pl", labelKey: "language.polish" },
+  { code: "el", labelKey: "language.greek" },
+  { code: "cs", labelKey: "language.czech" },
+  { code: "sv", labelKey: "language.swedish" },
+  { code: "ro", labelKey: "language.romanian" },
+  { code: "uk", labelKey: "language.ukrainian" },
 ];
 
-const DICTATION_CHINESE_SCRIPT_OPTIONS: {
-  value: ChineseScriptPreference;
-  labelKey: MessageKey;
-}[] = [
-  {
-    value: "simplified",
-    labelKey: "dictation.settings.chineseScript.simplified",
-  },
-  {
-    value: "traditional",
-    labelKey: "dictation.settings.chineseScript.traditional",
-  },
-  {
-    value: "preserve",
-    labelKey: "dictation.settings.chineseScript.preserve",
-  },
+const DICTATION_CHINESE_SCRIPT_OPTIONS: { value: ChineseScriptPreference; labelKey: TranslationKey }[] = [
+  { value: "simplified", labelKey: "dictation.settings.chineseScript.simplified" },
+  { value: "traditional", labelKey: "dictation.settings.chineseScript.traditional" },
+  { value: "preserve", labelKey: "dictation.settings.chineseScript.preserve" },
 ];
-
-function dictationSettingsLanguageKey(code: string | null): MessageKey {
-  return code ? (`dictation.language.${code}` as MessageKey) : "dictation.language.auto";
-}
 
 function DictationSettingsPanel({
   settings,
@@ -2905,7 +2999,7 @@ function DictationSettingsPanel({
   settings: StikSettings;
   onSettingsChange: (s: StikSettings) => void;
 }) {
-  const { t } = useI18n();
+  const { t } = useTranslation();
   const [models, setModels] = useState<DictationModelInfo[]>([]);
   const [status, setStatus] = useState<DictationStatus | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
@@ -2951,9 +3045,9 @@ function DictationSettingsPanel({
       setModels(list);
       setStatus(stat);
     } catch (e) {
-      setErrorMsg(translateBackendError(e, t));
+      setErrorMsg(String(e));
     }
-  }, [t]);
+  }, []);
 
   useEffect(() => {
     refresh();
@@ -2984,7 +3078,7 @@ function DictationSettingsPanel({
       "dictation:download_error",
       (e) => {
         setDownloadingId(null);
-        setErrorMsg(translateBackendError(e.payload.message, t));
+        setErrorMsg(e.payload.message);
       },
     );
     return () => {
@@ -2992,7 +3086,7 @@ function DictationSettingsPanel({
       u2.then((fn) => fn());
       u3.then((fn) => fn());
     };
-  }, [refresh, t]);
+  }, [refresh]);
 
   const startDownload = useCallback(async (modelId: string) => {
     setErrorMsg(null);
@@ -3004,9 +3098,9 @@ function DictationSettingsPanel({
       await invoke("dictation_download_model", { modelId });
     } catch (e) {
       setDownloadingId(null);
-      setErrorMsg(translateBackendError(e, t));
+      setErrorMsg(String(e));
     }
-  }, [t]);
+  }, []);
 
   const cancelDownload = useCallback(async () => {
     try {
@@ -3032,12 +3126,12 @@ function DictationSettingsPanel({
         });
         await refresh();
       } catch (e) {
-        setErrorMsg(translateBackendError(e, t));
+        setErrorMsg(String(e));
       } finally {
         setLoadingId(null);
       }
     },
-    [settings, dictation, onSettingsChange, refresh, t],
+    [settings, dictation, onSettingsChange, refresh],
   );
 
   const deleteModel = useCallback(
@@ -3052,33 +3146,31 @@ function DictationSettingsPanel({
         }
         await refresh();
       } catch (e) {
-        setErrorMsg(translateBackendError(e, t));
+        setErrorMsg(String(e));
       }
     },
-    [settings, dictation, onSettingsChange, refresh, t],
+    [settings, dictation, onSettingsChange, refresh],
   );
 
   return (
     <div className="space-y-4">
       <div className="p-4 bg-line/30 rounded-xl border border-line/50">
-        <p className="text-[13px] text-ink font-medium">
-          {t("dictation.settings.title")}
-        </p>
+        <p className="text-[13px] text-ink font-medium">{t("dictation.onDevice")}</p>
         <p className="mt-1 text-[12px] text-stone leading-relaxed">
-          {t("dictation.settings.description")}
+          {t("dictation.whisperLocal")}
         </p>
       </div>
 
       {/* Language */}
       <div>
         <label className="block text-[12px] text-stone mb-1.5">
-          {t("dictation.settings.language")}
+          {t("dictation.language")}
         </label>
         <Dropdown
           value={dictation.active_language ?? ""}
           options={DICTATION_LANGUAGES.map((l) => ({
             value: l.code ?? "",
-            label: t(dictationSettingsLanguageKey(l.code)),
+            label: t(l.labelKey),
           }))}
           onChange={(value) =>
             onSettingsChange({
@@ -3089,10 +3181,10 @@ function DictationSettingsPanel({
               },
             })
           }
-          placeholder={t("dictation.setup.selectLanguage")}
+          placeholder={t("dictation.selectLanguage")}
         />
         <p className="mt-1.5 text-[11px] text-stone">
-          {t("dictation.settings.languageHint")}
+          {t("dictation.languageDescribe")}
         </p>
       </div>
 
@@ -3123,9 +3215,7 @@ function DictationSettingsPanel({
 
       {/* Model manager */}
       <div>
-        <label className="block text-[12px] text-stone mb-1.5">
-          {t("dictation.settings.models")}
-        </label>
+        <label className="block text-[12px] text-stone mb-1.5">{t("dictation.models")}</label>
         <div className="space-y-2">
           {models.map((m) => {
             const isActive = status?.active_model === m.id;
@@ -3146,7 +3236,7 @@ function DictationSettingsPanel({
                     </span>
                     {isActive && (
                       <span className="text-[10px] text-coral uppercase tracking-wide">
-                        {t("dictation.settings.active")}
+                        {t("common.active")}
                       </span>
                     )}
                   </div>
@@ -3166,7 +3256,11 @@ function DictationSettingsPanel({
                         }}
                       />
                     </div>
-                    <div className="flex items-center justify-between text-[11px] text-stone">
+                    <div
+                      className="flex items-center justify-between text-[11px] text-stone"
+                      role="status"
+                      aria-live="polite"
+                    >
                       <span>
                         {(() => {
                           const pct = Math.round(downloadProgress * 100);
@@ -3179,7 +3273,7 @@ function DictationSettingsPanel({
                           }
                           return downloadProgress > 0
                             ? `${pct}%`
-                            : t("dictation.setup.connecting");
+                            : t("dictation.connecting");
                         })()}
                       </span>
                       <button
@@ -3187,7 +3281,7 @@ function DictationSettingsPanel({
                         onClick={cancelDownload}
                         className="text-coral hover:underline"
                       >
-                        {t("common.cancel")}
+                        {t("common.cancelAction")}
                       </button>
                     </div>
                   </div>
@@ -3201,9 +3295,8 @@ function DictationSettingsPanel({
                             disabled
                             className="px-3 py-1 text-[11px] bg-coral/60 text-white rounded-md cursor-wait"
                           >
-                            {t("dictation.settings.loading", {
-                              seconds: loadElapsed,
-                            })}
+
+                            {t("common.loadingEllipsis")} {loadElapsed}s
                           </button>
                         ) : (
                           <button
@@ -3212,7 +3305,7 @@ function DictationSettingsPanel({
                             disabled={loadingId !== null}
                             className="px-3 py-1 text-[11px] bg-coral text-white rounded-md hover:bg-coral/90 disabled:opacity-50"
                           >
-                            {t("dictation.settings.useThisModel")}
+                            {t("dictation.useModel")}
                           </button>
                         ))}
                       <button
@@ -3221,14 +3314,14 @@ function DictationSettingsPanel({
                         disabled={loadingId !== null}
                         className="px-3 py-1 text-[11px] text-stone border border-line rounded-md hover:text-coral hover:border-coral/30 disabled:opacity-50"
                       >
-                        {t("dictation.settings.delete")}
+                        {t("common.delete")}
                       </button>
                     </div>
                     {loadingId === m.id && (
                       <p className="mt-1.5 text-[10px] text-stone leading-snug">
                         {m.size_mb >= 500
-                          ? t("dictation.settings.firstLoadHigh")
-                          : t("dictation.settings.firstLoadNormal")}
+                          ? t("dictation.firstLoadLong")
+                          : t("dictation.firstLoadMedium")}
                       </p>
                     )}
                   </div>
@@ -3239,7 +3332,7 @@ function DictationSettingsPanel({
                     disabled={downloadingId !== null}
                     className="px-3 py-1 text-[11px] bg-coral text-white rounded-md hover:bg-coral/90 disabled:opacity-50"
                   >
-                    {t("dictation.settings.download")}
+                    {t("common.download")}
                   </button>
                 )}
               </div>

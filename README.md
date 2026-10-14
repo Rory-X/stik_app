@@ -22,11 +22,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Rory-X/stik_app/releases/latest"><img src="https://img.shields.io/github/v/release/Rory-X/stik_app?style=flat-square&color=E8705F&v=1" alt="Latest release"></a>
-  <img src="https://img.shields.io/github/license/Rory-X/stik_app?style=flat-square&v=1" alt="License">
-  <img src="https://img.shields.io/badge/platform-macOS-000?style=flat-square&logo=apple&v=1" alt="macOS">
-  <a href="https://github.com/Rory-X/stik_app/releases"><img src="https://img.shields.io/github/downloads/Rory-X/stik_app/total?style=flat-square&color=E8705F&v=1" alt="Downloads"></a>
-  <a href="https://github.com/Rory-X/stik_app/stargazers"><img src="https://img.shields.io/github/stars/Rory-X/stik_app?style=flat-square&color=E8705F&v=1" alt="Stars"></a>
+  <a href="https://github.com/Rory-X/stik_app/releases/latest"><img src="https://shieldcn.dev/github/0xMassi/stik_app/release.svg?color=E8705F" alt="Latest release"></a>
+  <img src="https://shieldcn.dev/github/0xMassi/stik_app/license.svg" alt="License">
+  <img src="https://shieldcn.dev/badge/platform-macOS-000.svg?logo=apple" alt="macOS">
+  <a href="https://github.com/Rory-X/stik_app/releases"><img src="https://shieldcn.dev/github/downloads/0xMassi/stik_app.svg?color=E8705F" alt="Downloads"></a>
+  <a href="https://github.com/Rory-X/stik_app/stargazers"><img src="https://shieldcn.dev/github/0xMassi/stik_app/stars.svg?color=E8705F" alt="Stars"></a>
 </p>
 
 <p align="center">
@@ -34,7 +34,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.stik.ink/download?utm_source=github&utm_medium=readme&utm_campaign=hero_cta"><img src="https://img.shields.io/badge/Download_Stik_for_Mac-E8705F?style=for-the-badge&logo=apple&logoColor=white" alt="Download Stik for Mac"></a>
+  <a href="https://www.stik.ink/download?utm_source=github&utm_medium=readme&utm_campaign=hero_cta"><img src="https://shieldcn.dev/badge/Download_Stik_for_Mac-E8705F.svg?logo=apple&logoColor=white&size=lg" alt="Download Stik for Mac"></a>
 </p>
 
 ---
@@ -66,7 +66,7 @@ brew tap 0xMassi/stik
 brew install --cask stik
 ```
 
-> Requires **macOS 10.15+**. On first launch, grant Accessibility permissions when prompted (needed for global shortcuts).
+> Requires **macOS 14+ (Sonoma)**. On first launch, grant Accessibility permissions when prompted (needed for global shortcuts).
 
 ### Update
 
@@ -78,25 +78,43 @@ brew upgrade --cask stik
 
 From v0.3.3 onwards, Stik includes a built-in auto-updater that silently downloads new versions in the background. Updates apply on next app restart.
 
+### Beta builds
+
+Every push to `develop` produces a signed build, published under [Releases](https://github.com/Rory-X/stik_app/releases) as a prerelease. It installs as **Stik Beta** beside your stable copy, and Settings shows a BETA pill next to the title so you always know which one you're in.
+
+A beta reads the same notes and settings as the stable app. Before you test anything destructive, send it somewhere harmless: Settings, Folders, Notes directory.
+
+Stable users never see these builds. Beta releases ship no updater artifacts and leave the update feed alone.
+
 ## Features
 
-**Capture** -- Global shortcuts summon a floating post-it from anywhere. Type, close, done. Notes are saved as markdown in `~/Documents/Stik/`.
+**Capture.** A global shortcut summons a floating post-it over whatever you're doing. Type, close, done. Every note lands in `~/Documents/Stik/` as markdown.
 
-**Organize** -- Folders (Inbox, Work, Ideas, or your own). Move notes with a keystroke. Search everything instantly.
+**Voice.** `Cmd+Shift+D` transcribes speech straight into the note you're editing. `Cmd+Shift+V` opens a fresh post-it already listening. WhisperKit runs the model on the Neural Engine, so the audio never leaves your Mac.
 
-**Pin** -- Keep important notes floating on your desktop as sticky notes.
+**Clip.** `Cmd+Shift+C` takes whatever text you've selected in Safari, Terminal, VS Code, or any standard text field and appends it to a Clips note. No copy, no paste, no window switching.
 
-**Rich Editor** -- Source-mode markdown with syntax highlighting, `==highlighting==`, `[[wiki-links]]` to other notes, collapsible headings, image paste/drop, task lists, interactive tables, and a link popover for quick editing. Type `/` for slash commands -- instant templates for meetings, standups, journals, tables, and more. Create your own custom templates in Settings. Optional Vim mode.
+**Organize.** Folders you name. Move a note with one keystroke. Search everything from the command palette.
 
-**On-Device AI** -- Semantic search, smart folder suggestions, and note embeddings. Powered by Apple's NaturalLanguage framework. Everything runs locally -- no cloud, no API keys, no data leaves your Mac.
+**Pin.** Park a note on your desktop as a floating sticky.
 
-**Share** -- Copy notes as rich text, markdown, or image. Sync folders via git with background auto-sync.
+**Rich editor.** Source-mode markdown with syntax highlighting, `==highlights==`, `[[wiki-links]]`, collapsible headings, image paste and drop, task lists, and editable tables. Type `/` for slash commands. Write your own templates in Settings. Vim mode if you want it.
 
-**Import** -- Browse and import notes from Apple Notes directly into Stik. No export/import files needed.
+**Lock.** Encrypt a note with AES-256 and open it with Touch ID or your device password. Set an idle timeout, or relock everything when the Mac sleeps.
 
-**Themes** -- System, Light, or Dark mode. Switches live, respects macOS appearance.
+**On-device AI.** Semantic search, folder suggestions, and note embeddings through Apple's NaturalLanguage framework. No cloud, no API keys, nothing sent anywhere.
 
-**Remember** -- Capture streak tracks your daily note-taking habit. "On This Day" resurfaces notes from past years.
+**Language.** English and Simplified Chinese (简体中文). Press `Cmd+Shift+,` and pick one from the first card in the Appearance tab. Every open window switches without a restart. Leave it on "Follow system language" and Stik reads your macOS setting.
+
+**Sync.** Turn on iCloud Drive in Settings and your notes reach your other Macs. Dropbox and Syncthing work too: point Stik at any folder they already watch.
+
+**Share.** Copy a note as rich text, markdown, or an image. Push a folder to a git remote and Stik keeps it synced in the background.
+
+**Import.** Pull notes out of Apple Notes from inside Stik. Nothing to export first.
+
+**Themes.** System, Light, Dark, or your own colors. Follows macOS appearance as it changes.
+
+**Remember.** A capture streak counts your daily habit. "On This Day" brings back notes from past years.
 
 ## Keyboard Shortcuts
 
@@ -105,44 +123,52 @@ All shortcuts are customizable in Settings.
 | Shortcut | Action |
 |----------|--------|
 | `Cmd+Shift+S` | Capture a new note |
-| `Cmd+Shift+P` | Command Palette (search + folders) |
-| `Cmd+Shift+M` | Command Palette (alt shortcut) |
+| `Cmd+Shift+D` | Start or stop dictation in the current note |
+| `Cmd+Shift+V` | New post-it, dictating from the start |
+| `Cmd+Shift+C` | Append the selected text from any app to Clips |
+| `Cmd+Shift+P` | Command palette (search + folders) |
+| `Cmd+Shift+M` | Command palette (alt shortcut) |
 | `Cmd+Shift+L` | Reopen last note |
+| `Cmd+.` | Zen mode |
 | `Cmd+Shift+,` | Open settings |
 
 ## Your Data, Your Machine
 
 - Notes are **plain markdown files** in `~/Documents/Stik/` -- open them in any editor
 - All AI runs **on-device** via Apple frameworks -- nothing is sent anywhere
-- No account, no cloud, no tracking, no telemetry
+- No account and no cloud service. Anonymous analytics are off by default and run only after you explicitly opt in; note content, titles, folders, and paths are never collected.
 - Settings stored locally in `~/.stik/`
 - Want sync? Just enable iCloud Drive for your Documents folder. Stik works automatically with iCloud, Dropbox, Syncthing, or anything that syncs `~/Documents`
 
 ## Build from Source
 
+This fork preserves independent capture windows, recoverable session drafts,
+pinned-note sorting, image previews, and code-block controls alongside upstream
+v0.9.0. macOS 14+ remains the supported release platform.
+
+Windows development is experimental. Install Node.js 20+, Bun 1.4.1, Rust,
+and the Windows Tauri prerequisites, then run `bun install --frozen-lockfile`
+and `bun run dev:desktop:win`. Windows CI checks the frontend and Rust build
+and tests. Apple Notes, iCloud, on-device AI, dictation, note unlocking, and
+native image capture are unavailable in this build; their controls are hidden.
+
 ### Prerequisites
 
-- macOS 10.15+
+- macOS 14+ (Sonoma)
 - [Xcode Command Line Tools](https://developer.apple.com/xcode/resources/) (`xcode-select --install`)
-- [Rust](https://rustup.rs/) 1.70+
-- [Node.js](https://nodejs.org/) 18+
-- [Protobuf compiler](https://protobuf.dev/) (`brew install protobuf`)
+- [Rust](https://rustup.rs/) stable
+- [Node.js](https://nodejs.org/) 20+
+- [Bun](https://bun.com/docs/installation) 1.4.1 (pinned in `.bun-version`)
 
 ### Build
 
 ```bash
 git clone --recurse-submodules https://github.com/Rory-X/stik_app.git
 cd stik_app
-npm install
-npm run build:sidecar   # Build the DarwinKit sidecar binary
-npm run dev:desktop     # Development with hot reload
-npm run build:desktop   # Local production .app and .dmg bundle
-npm run verify          # Tests, frontend build, and Rust check
+bun install --frozen-lockfile
+./scripts/build-dev.sh dev    # Development with hot reload
+./scripts/build-dev.sh build  # Local .app bundle for testing
 ```
-
-If you cloned without submodules, run `git submodule update --init --recursive` before building the sidecar.
-
-`npm run build:desktop` disables updater artifact generation for local builds. Release builds still use `npm run tauri build` in CI with `TAURI_SIGNING_PRIVATE_KEY` configured.
 
 ## Tech Stack
 
@@ -155,7 +181,7 @@ If you cloned without submodules, run `git submodule update --init --recursive` 
 
 ## Contributing
 
-Contributions are welcome. Please open an issue first to discuss what you'd like to change.
+Contributions are welcome. Bun 1.4.1 is the canonical JavaScript package manager; keep `bun.lock` current and do not add a second lockfile. Node and Vitest remain the build-tool runtime and test runner. Please open an issue first to discuss what you'd like to change.
 
 ```bash
 # Check Rust code
@@ -165,8 +191,16 @@ cd src-tauri && cargo check
 cd src-tauri && cargo fmt
 
 # Type check frontend
-npm run build
+bun run build
+
+# Run tests
+bun run test
+cd src-tauri && cargo test
 ```
+
+Maintainers preparing a stable build should follow the [release checklist](docs/release-checklist.md).
+
+**Translations.** Every string lives in [`src/i18n/locales/`](src/i18n/locales/). Copy `en.ts`, translate the values, and add your locale to `LOCALES` in `src/i18n/index.ts`. The catalogue is typed against English, so a missing key breaks the build instead of shipping a blank label, and `bun run test` checks both catalogues for drift. Corrections to [`zh-CN.ts`](src/i18n/locales/zh-CN.ts) are welcome: read it top to bottom without opening a single component.
 
 ## Ideas Board
 
@@ -174,7 +208,7 @@ Got a feature idea or want to vote on what gets built next? Visit the **[Stik Id
 
 ## Support
 
-Have a question, found a bug, or want to request a feature? Reach out at [help@stik.ink](mailto:help@stik.ink), join [Discord](https://discord.gg/gG8vdCCRzW), follow us on [X](https://x.com/stik_app), or [open an issue](https://github.com/Rory-X/stik_app/issues).
+Have a question, found a bug, or want to request a feature? Reach out at [massimianivalerio1@gmail.com](mailto:massimianivalerio1@gmail.com), join [Discord](https://discord.gg/gG8vdCCRzW), follow us on [X](https://x.com/stik_app), or [open an issue](https://github.com/Rory-X/stik_app/issues).
 
 ## License
 
