@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import ImagePreviewWindow from "./ImagePreviewWindow";
+import { resetPlatformCapabilitiesCache } from "@/utils/platformCapabilities";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -25,11 +26,20 @@ const invokeMock = vi.mocked(invoke);
 
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
+let imageCopySupported = true;
 
 beforeEach(() => {
+  resetPlatformCapabilitiesCache();
+  imageCopySupported = true;
   container = document.createElement("div");
   document.body.appendChild(container);
   invokeMock.mockImplementation((command) => {
+    if (command === "get_platform_capabilities") {
+      return Promise.resolve({
+        os: imageCopySupported ? "macos" : "windows",
+        image_copy: imageCopySupported,
+      });
+    }
     if (command === "get_settings") {
       return Promise.resolve({ locale: "en" });
     }
@@ -71,6 +81,18 @@ async function renderPreviewWindow() {
 }
 
 describe("ImagePreviewWindow context menu", () => {
+  it("hides native image copy when the platform does not support it", async () => {
+    imageCopySupported = false;
+    await renderPreviewWindow();
+    await act(async () => {
+      container!.querySelector("img")!.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+      );
+    });
+    expect(container!.querySelector(".image-preview-context-menu")).toBeNull();
+    expect(invokeMock.mock.calls.some(([command]) => command === "copy_preview_image_to_clipboard")).toBe(false);
+  });
+
   it("copies the original preview image source from the context menu", async () => {
     await renderPreviewWindow();
 
